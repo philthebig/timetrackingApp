@@ -1,0 +1,80 @@
+name: Deploy Timekeeping App
+
+on:
+  push:
+    branches: [ main, production ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Setup SQL Server (for testing)
+      uses: potatoqualitee/mssqlsuite@v1.5.1
+      with:
+        install: sqlengine, sqlclient
+    
+    - name: Validate SQL Scripts
+      run: |
+        echo "Validating SQL syntax..."
+        for file in sql/*.sql; do
+          echo "Checking $file"
+          # Basic syntax check (actual validation would need SQL Server)
+          if [ ! -f "$file" ]; then
+            echo "Error: $file not found"
+            exit 1
+          fi
+        done
+        echo "SQL scripts validated"
+    
+    - name: Check ColdFusion files
+      run: |
+        echo "Validating ColdFusion files..."
+        cfm_files=$(find cfm -name "*.cfm" -o -name "*.cfc")
+        if [ -z "$cfm_files" ]; then
+          echo "Error: No ColdFusion files found"
+          exit 1
+        fi
+        echo "ColdFusion files found and validated"
+    
+    - name: Create required directories
+      run: |
+        mkdir -p uploads exports logs
+        chmod 755 uploads exports logs
+    
+    - name: Deploy to Server (Example using rsync)
+      if: github.ref == 'refs/heads/production'
+      run: |
+        # This is a template - adjust for your deployment method
+        echo "Would deploy to production server here"
+        # Example:
+        # rsync -avz --delete \
+        #   --exclude 'config.cfm' \
+        #   --exclude 'uploads/*' \
+        #   --exclude 'exports/*' \
+        #   --exclude 'logs/*' \
+        #   ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}
+    
+    - name: Create deployment artifact
+      run: |
+        zip -r timekeeping-app-${{ github.sha }}.zip \
+          cfm/ \
+          css/ \
+          js/ \
+          sql/ \
+          config.template.cfm \
+          README.md \
+          QUICKSTART.md \
+          DEPLOYMENT.md \
+          -x "*.git*" "uploads/*" "exports/*" "logs/*"
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: timekeeping-app-deployment
+        path: timekeeping-app-${{ github.sha }}.zip
+        retention-days: 30

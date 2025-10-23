@@ -1,0 +1,74 @@
+# ColdFusion
+WEB-INF/
+cfclasses/
+*.class
+
+# Application Directories - do not commit user data
+uploads/*
+!uploads/.gitkeep
+exports/*
+!exports/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Configuration - keep template, ignore actual config
+config.cfm
+!config.template.cfm
+
+# Database connection strings (if stored separately)
+datasource.cfm
+db-config.cfm
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Logs
+*.log
+error.log
+access.log
+
+# Backup files
+*.backup
+*.old
+
+# Environment specific
+.env
+.env.local
+.env.production
+
+# Compiled / Build
+dist/
+build/
+
+# Dependencies (if using package managers)
+node_modules/
+bower_components/
+
+# Test files (if added later)
+tests/output/
+coverage/
+
+# Database
+*.mdf
+*.ldf
+*.bak
+
+# Sensitive data
+secrets.cfm
+credentials.cfm
