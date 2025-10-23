@@ -146,54 +146,66 @@
             SELECT SCOPE_IDENTITY() AS BatchID;
         </cfquery>
         
-        <!--- Get BatchID from the returned query --->
+        <!--- Get BatchID --->
         <cfif createBatch.recordCount GT 0>
             <cfset var batchID = createBatch.BatchID[1]>
         <cfelse>
             <cfthrow message="Failed to retrieve BatchID after insert.">
         </cfif>
         
-        <!--- FIXED: Get sheet info first, then find the data sheet --->
-        <cfspreadsheet action="info" src="#filePath#" name="sheetInfo">
+        <!--- Read Excel file - Using your proven approach with multiple fallbacks --->
+        <cfset var excelData = "">
+        <cfset var sheetName = "Data">
         
-        <!--- Log available sheets --->
-        <cflog file="timekeeping_import" 
-               text="Batch #batchID#: Available sheets: #structKeyList(sheetInfo)#"
-               type="information">
-        
-        <!--- Find the correct sheet (try "data", "Data", or use sheet 2 if multiple sheets) --->
-        <cfset var targetSheet = 1>
-        <cfset var sheetFound = false>
-        
-        <!--- Check if there's a sheet called "data" (case insensitive) --->
-        <cfloop collection="#sheetInfo#" item="sheetName">
-            <cfif lCase(sheetName) EQ "data">
-                <cfset targetSheet = sheetInfo[sheetName]>
-                <cfset sheetFound = true>
-                <cflog file="timekeeping_import" 
-                       text="Batch #batchID#: Found 'data' sheet at index #targetSheet#"
-                       type="information">
-                <cfbreak>
-            </cfif>
-        </cfloop>
-        
-        <!--- If "data" sheet not found, use sheet 2 if it exists (skip first sheet) --->
-        <cfif NOT sheetFound AND structCount(sheetInfo) GT 1>
-            <cfset targetSheet = 2>
+        <!--- Try reading with sheetname attribute first --->
+        <cftry>
+            <cfspreadsheet action="read" 
+                          src="#filePath#" 
+                          query="excelData" 
+                          sheetname="#sheetName#"
+                          headerrow="1"
+                          excludeHeaderRow="true">
+            
             <cflog file="timekeeping_import" 
-                   text="Batch #batchID#: 'data' sheet not found, using sheet 2"
+                   text="Batch #batchID#: Read using sheetname=#sheetName#"
                    type="information">
+            
+            <cfcatch type="any">
+                <!--- Fallback 1: Try sheet index 1 --->
+                <cftry>
+                    <cfspreadsheet action="read" 
+                                  src="#filePath#" 
+                                  query="excelData" 
+                                  sheet="1"
+                                  headerrow="1"
+                                  excludeHeaderRow="true">
+                    
+                    <cflog file="timekeeping_import" 
+                           text="Batch #batchID#: Read using sheet=1 (first sheet)"
+                           type="information">
+                    
+                    <cfcatch type="any">
+                        <!--- Fallback 2: Try without sheet specification --->
+                        <cfspreadsheet action="read" 
+                                      src="#filePath#" 
+                                      query="excelData" 
+                                      headerrow="1"
+                                      excludeHeaderRow="true">
+                        
+                        <cflog file="timekeeping_import" 
+                               text="Batch #batchID#: Read using default (no sheet specified)"
+                               type="information">
+                    </cfcatch>
+                </cftry>
+            </cfcatch>
+        </cftry>
+        
+        <!--- Verify we got data --->
+        <cfif NOT isQuery(excelData) OR excelData.recordCount EQ 0>
+            <cfthrow message="No data found in Excel file. Please check the file format.">
         </cfif>
         
-        <!--- Read Excel file using sheet number --->
-        <cfspreadsheet action="read" 
-                      src="#filePath#" 
-                      query="excelData" 
-                      sheet="#targetSheet#"
-                      headerrow="1"
-                      excludeHeaderRow="true">
-        
-        <!--- Debug: Log columns found --->
+        <!--- Log columns found --->
         <cflog file="timekeeping_import" 
                text="Batch #batchID#: Found columns: #excelData.columnList#"
                type="information">
@@ -202,92 +214,62 @@
         <cfset var recordCount = 0>
         <cfset var skippedCount = 0>
         
-        <!--- Map column names (case-insensitive search) --->
-        <cfset var clientCol = "">
-        <cfset var serviceCol = "">
-        <cfset var fileNumCol = "">
-        <cfset var fileNameCol = "">
+        <!--- Find Contact Name column (handles underscore conversion) --->
         <cfset var contactNameCol = "">
-        <cfset var hoursCol = "">
+        <cfset var columns = listToArray(excelData.columnList)>
         
-        <!--- Find the correct column names --->
-        <cfloop list="#excelData.columnList#" index="colName">
-            <cfset var colNameLower = lCase(trim(colName))>
-            
-            <cfif findNoCase("client", colNameLower) AND clientCol EQ "">
-                <cfset clientCol = colName>
-            </cfif>
-            <cfif findNoCase("service", colNameLower) AND serviceCol EQ "">
-                <cfset serviceCol = colName>
-            </cfif>
-            <!--- Look for file # column --->
-            <cfif (findNoCase("file", colNameLower) AND find(chr(35), colNameLower)) OR findNoCase("file_num", colNameLower) OR findNoCase("filenum", colNameLower)>
-                <cfset fileNumCol = colName>
-            </cfif>
-            <cfif (findNoCase("file", colNameLower) AND findNoCase("name", colNameLower)) OR findNoCase("file_name", colNameLower) OR findNoCase("filename", colNameLower)>
-                <cfset fileNameCol = colName>
-            </cfif>
-            <cfif findNoCase("contact", colNameLower) AND findNoCase("name", colNameLower)>
+        <cfloop array="#columns#" index="colName">
+            <cfif compareNoCase(colName, "Contact_Name") EQ 0 OR 
+                  compareNoCase(colName, "Contact Name") EQ 0 OR
+                  findNoCase("contact", colName) GT 0>
                 <cfset contactNameCol = colName>
-            </cfif>
-            <cfif findNoCase("hour", colNameLower) OR findNoCase("recorded", colNameLower)>
-                <cfset hoursCol = colName>
+                <cfbreak>
             </cfif>
         </cfloop>
         
-        <!--- If columns not found by name, use position --->
-        <cfif clientCol EQ "" AND listLen(excelData.columnList) GTE 1>
-            <cfset clientCol = listGetAt(excelData.columnList, 1)>
+        <cfif contactNameCol EQ "">
+            <!--- Fallback to column 5 if we can't find it by name --->
+            <cfif listLen(excelData.columnList) GTE 5>
+                <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
+            <cfelse>
+                <cfthrow message="Could not find Contact Name column in Excel file">
+            </cfif>
         </cfif>
-        <cfif serviceCol EQ "" AND listLen(excelData.columnList) GTE 2>
-            <cfset serviceCol = listGetAt(excelData.columnList, 2)>
-        </cfif>
-        <cfif contactNameCol EQ "" AND listLen(excelData.columnList) GTE 5>
-            <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
-        </cfif>
+        
+        <!--- Find Hours column --->
+        <cfset var hoursCol = "">
+        <cfloop array="#columns#" index="colName">
+            <cfif findNoCase("hour", colName) GT 0 OR 
+                  findNoCase("recorded", colName) GT 0>
+                <cfset hoursCol = colName>
+                <cfbreak>
+            </cfif>
+        </cfloop>
+        
         <cfif hoursCol EQ "">
             <cfset hoursCol = listLast(excelData.columnList)>
         </cfif>
         
         <!--- Log column mapping --->
         <cflog file="timekeeping_import" 
-               text="Batch #batchID#: Mapped columns - Client:#clientCol#, Service:#serviceCol#, Contact:#contactNameCol#, Hours:#hoursCol#"
+               text="Batch #batchID#: Using Contact column: #contactNameCol#, Hours column: #hoursCol#"
                type="information">
         
         <!--- Process each row --->
         <cfloop query="excelData">
-            <cfset var category = "">
-            <cfset var projectMatter = "">
             <cfset var clientContact = "">
             <cfset var clientEmail = "">
             <cfset var firstName = "">
             <cfset var lastName = "">
             <cfset var hours = 0>
             
-            <!--- Get values --->
             <cftry>
-                <!--- Client/Category --->
-                <cfif clientCol NEQ "" AND isDefined("excelData.#clientCol#")>
-                    <cfset category = trim(excelData[clientCol][currentRow])>
-                </cfif>
-                
-                <!--- Service/Project --->
-                <cfif serviceCol NEQ "" AND isDefined("excelData.#serviceCol#")>
-                    <cfset var serviceValue = trim(excelData[serviceCol][currentRow])>
-                    <cfif fileNameCol NEQ "" AND isDefined("excelData.#fileNameCol#")>
-                        <cfset var fileNameValue = trim(excelData[fileNameCol][currentRow])>
-                        <cfset projectMatter = serviceValue & " - " & fileNameValue>
-                    <cfelse>
-                        <cfset projectMatter = serviceValue>
-                    </cfif>
-                </cfif>
-                
-                <!--- Contact Name (contains email) --->
+                <!--- Get Contact Name value --->
                 <cfif contactNameCol NEQ "" AND isDefined("excelData.#contactNameCol#")>
                     <cfset clientContact = trim(excelData[contactNameCol][currentRow])>
                 </cfif>
                 
-                <!--- Hours --->
+                <!--- Get Hours value --->
                 <cfif hoursCol NEQ "" AND isDefined("excelData.#hoursCol#")>
                     <cfset var hoursValue = excelData[hoursCol][currentRow]>
                     <cfif isNumeric(hoursValue)>
@@ -296,23 +278,30 @@
                 </cfif>
                 
                 <cfcatch>
-                    <!--- Skip rows with errors --->
                     <cfset skippedCount = skippedCount + 1>
                     <cfcontinue>
                 </cfcatch>
             </cftry>
             
-            <!--- Extract email from contact field --->
+            <!--- Extract email and name from contact field --->
             <cfif clientContact NEQ "">
+                <!--- Extract email --->
                 <cfset var emailMatch = reMatchNoCase("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clientContact)>
                 <cfif arrayLen(emailMatch) GT 0>
                     <cfset clientEmail = lCase(trim(emailMatch[1]))>
                     
-                    <!--- Extract name (format: "LastName, FirstName [...]") --->
-                    <cfset var nameMatch = reMatchNoCase("([A-Za-z\-]+),\s*([A-Za-z\-]+)", clientContact)>
-                    <cfif arrayLen(nameMatch) GT 0>
-                        <cfset var nameParts = listToArray(nameMatch[1], ",")>
-                        <cfif arrayLen(nameParts) EQ 2>
+                    <!--- Extract name: "LastName, FirstName [...]" format --->
+                    <!--- Remove everything after [ --->
+                    <cfset var nameStr = clientContact>
+                    <cfif find("[", nameStr) GT 0>
+                        <cfset nameStr = left(nameStr, find("[", nameStr) - 1)>
+                    </cfif>
+                    <cfset nameStr = trim(nameStr)>
+                    
+                    <!--- Split by comma --->
+                    <cfif find(",", nameStr) GT 0>
+                        <cfset var nameParts = listToArray(nameStr, ",")>
+                        <cfif arrayLen(nameParts) GTE 2>
                             <cfset lastName = trim(nameParts[1])>
                             <cfset firstName = trim(nameParts[2])>
                         </cfif>
@@ -320,7 +309,7 @@
                 </cfif>
             </cfif>
             
-            <!--- Only insert if we have an email address --->
+            <!--- Only insert if we have an email --->
             <cfif clientEmail NEQ "">
                 <cfquery datasource="PMSD_SATS">
                     INSERT INTO dbo.TimekeepingStaging (
@@ -336,8 +325,8 @@
                     ) VALUES (
                         <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">,
                         <cfqueryparam value="#currentRow#" cfsqltype="cf_sql_integer">,
-                        <cfqueryparam value="#category#" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="#projectMatter#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="" cfsqltype="cf_sql_varchar">,
                         <cfqueryparam value="#clientContact#" cfsqltype="cf_sql_varchar">,
                         <cfqueryparam value="#clientEmail#" cfsqltype="cf_sql_varchar">,
                         <cfqueryparam value="#firstName#" cfsqltype="cf_sql_varchar">,
