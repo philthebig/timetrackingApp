@@ -57,12 +57,6 @@
                                     <p><strong>Type:</strong> #cfcatch.type#</p>
                                     <p><strong>Message:</strong> #cfcatch.message#</p>
                                     <p><strong>Detail:</strong> #cfcatch.detail#</p>
-                                    <cfif structKeyExists(cfcatch, "sql")>
-                                        <div style="background: white; padding: 10px; margin-top: 10px;">
-                                            <strong>SQL:</strong><br>
-                                            <pre>#cfcatch.sql#</pre>
-                                        </div>
-                                    </cfif>
                                 </cfoutput>
                             </div>
                         </cfcatch>
@@ -86,7 +80,7 @@
                                        accept=".xlsx,.xls" 
                                        required>
                                 <div class="form-text">
-                                    Upload your timekeeping report. Data should be in the "data" sheet.
+                                    Upload your timekeeping report Excel file.
                                 </div>
                             </div>
 
@@ -159,11 +153,43 @@
             <cfthrow message="Failed to retrieve BatchID after insert.">
         </cfif>
         
-        <!--- Read Excel file from "data" sheet --->
+        <!--- FIXED: Get sheet info first, then find the data sheet --->
+        <cfspreadsheet action="info" src="#filePath#" name="sheetInfo">
+        
+        <!--- Log available sheets --->
+        <cflog file="timekeeping_import" 
+               text="Batch #batchID#: Available sheets: #structKeyList(sheetInfo)#"
+               type="information">
+        
+        <!--- Find the correct sheet (try "data", "Data", or use sheet 2 if multiple sheets) --->
+        <cfset var targetSheet = 1>
+        <cfset var sheetFound = false>
+        
+        <!--- Check if there's a sheet called "data" (case insensitive) --->
+        <cfloop collection="#sheetInfo#" item="sheetName">
+            <cfif lCase(sheetName) EQ "data">
+                <cfset targetSheet = sheetInfo[sheetName]>
+                <cfset sheetFound = true>
+                <cflog file="timekeeping_import" 
+                       text="Batch #batchID#: Found 'data' sheet at index #targetSheet#"
+                       type="information">
+                <cfbreak>
+            </cfif>
+        </cfloop>
+        
+        <!--- If "data" sheet not found, use sheet 2 if it exists (skip first sheet) --->
+        <cfif NOT sheetFound AND structCount(sheetInfo) GT 1>
+            <cfset targetSheet = 2>
+            <cflog file="timekeeping_import" 
+                   text="Batch #batchID#: 'data' sheet not found, using sheet 2"
+                   type="information">
+        </cfif>
+        
+        <!--- Read Excel file using sheet number --->
         <cfspreadsheet action="read" 
                       src="#filePath#" 
                       query="excelData" 
-                      sheet="data"
+                      sheet="#targetSheet#"
                       headerrow="1"
                       excludeHeaderRow="true">
         
@@ -194,7 +220,7 @@
             <cfif findNoCase("service", colNameLower) AND serviceCol EQ "">
                 <cfset serviceCol = colName>
             </cfif>
-            <!--- FIXED: Escape the # symbol using Chr(35) --->
+            <!--- Look for file # column --->
             <cfif (findNoCase("file", colNameLower) AND find(chr(35), colNameLower)) OR findNoCase("file_num", colNameLower) OR findNoCase("filenum", colNameLower)>
                 <cfset fileNumCol = colName>
             </cfif>
@@ -375,7 +401,7 @@
             
             <!--- Log error --->
             <cflog file="timekeeping_errors" 
-                   text="Batch #batchID#: #cfcatch.message# - #cfcatch.detail#"
+                   text="Error: #cfcatch.message# - #cfcatch.detail#"
                    type="error">
         </cfcatch>
     </cftry>
