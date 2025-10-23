@@ -1,17 +1,25 @@
-<cfquery name="createBatch" datasource="PMSD_SATS">
-    INSERT INTO dbo.ImportBatch (FileName, ImportedBy, Notes, TotalRecords)
-    VALUES (
-        <cfqueryparam value="#uploadInfo.clientFile#" cfsqltype="cf_sql_varchar">,
-        <cfqueryparam value="#form.importedBy#" cfsqltype="cf_sql_varchar" null="#trim(form.importedBy) EQ ''#">,
-        <cfqueryparam value="#form.notes#" cfsqltype="cf_sql_varchar" null="#trim(form.notes) EQ ''#">,
-        0
-    );
-    SELECT SCOPE_IDENTITY() AS BatchID;
-</cfquery>
 
-<!--- get BatchID from the returned query --->
-<cfif createBatch.recordCount GT 0>
-    <cfset var batchID = createBatch.BatchID[1]>
-<cfelse>
-    <cfthrow message="Failed to retrieve BatchID after insert.">
-</cfif>
+The following information is meant for the website developer for debugging purposes.
+Error Occurred While Processing Request
+Invalid CFML construct found on line 197 at column 103.
+ColdFusion was looking at the following text:
+file_num
+
+The CFML compiler was processing:
+
+An expression that began on line 197, column 69.
+The expression might be missing an ending #, for example, #expr instead of #expr#.
+An expression beginning with /", on line 197, column 68.This message is usually caused by a problem in the expressions structure.
+An expression beginning with findNoCase, on line 197, column 20.This message is usually caused by a problem in the expressions structure.
+An expression beginning with (, on line 197, column 19.This message is usually caused by a problem in the expressions structure.
+A cfif tag beginning on line 197, column 14.
+A cfif tag beginning on line 197, column 14.
+A cfif tag beginning on line 197, column 14.
+A cfif tag beginning on line 197, column 14.
+ 
+The error occurred in D:/inetpub/wwwroot/pmsd/sats/Timetracking/cfm/index.cfm: line 197
+195 :                 <cfset serviceCol = colName>
+196 :             </cfif>
+197 :             <cfif (findNoCase("file", colNameLower) AND findNoCase("#", colNameLower)) OR findNoCase("file_num", colNameLower)>
+198 :                 <cfset fileNumCol = colName>
+199 :             </cfif>
