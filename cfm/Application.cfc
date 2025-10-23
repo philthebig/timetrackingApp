@@ -6,8 +6,8 @@
     <cfset this.sessionTimeout = createTimeSpan(0, 0, 30, 0)>
     <cfset this.setClientCookies = true>
     
-    <!--- Data source - UPDATE THIS WITH YOUR ACTUAL DATASOURCE NAME --->
-    <cfset this.datasource = "yourDatasource">
+    <!--- Data sources - TWO DATABASES --->
+    <cfset this.datasource = "PMSD_SATS">  <!--- Main application database --->
     
     <!--- File upload settings --->
     <cfset this.uploadDirectory = expandPath("./uploads")>
@@ -17,6 +17,10 @@
         <!--- Initialize application variables --->
         <cfset application.version = "1.0.0">
         <cfset application.appName = "Timekeeping Import & Analytics">
+        
+        <!--- Store datasource names --->
+        <cfset application.mainDatasource = "PMSD_SATS">
+        <cfset application.directoryDatasource = "PMSD_SATS">  <!--- Same server, different database --->
         
         <!--- Create required directories --->
         <cfif not directoryExists(this.uploadDirectory)>
@@ -68,7 +72,7 @@
                     body { font-family: Arial, sans-serif; margin: 40px; }
                     .error-box { background: ##f8d7da; border: 1px solid ##f5c6cb; padding: 20px; border-radius: 5px; }
                     .error-box h2 { color: ##721c24; margin-top: 0; }
-                    .error-detail { background: white; padding: 10px; margin-top: 10px; font-family: monospace; font-size: 12px; }
+                    .error-detail { background: white; padding: 10px; margin-top: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
                 </style>
             </head>
             <body>
@@ -78,19 +82,19 @@
                     <p><strong>Message:</strong> #arguments.exception.message#</p>
                     <cfif structKeyExists(arguments.exception, "detail") AND arguments.exception.detail NEQ "">
                         <div class="error-detail">
-                            <strong>Detail:</strong><br>
+                            <strong>Detail:</strong>
                             #arguments.exception.detail#
                         </div>
                     </cfif>
                     <cfif structKeyExists(arguments.exception, "sql") AND arguments.exception.sql NEQ "">
                         <div class="error-detail">
-                            <strong>SQL:</strong><br>
+                            <strong>SQL:</strong>
                             #arguments.exception.sql#
                         </div>
                     </cfif>
                     <cfif structKeyExists(arguments.exception, "queryError") AND arguments.exception.queryError NEQ "">
                         <div class="error-detail">
-                            <strong>Query Error:</strong><br>
+                            <strong>Query Error:</strong>
                             #arguments.exception.queryError#
                         </div>
                     </cfif>
