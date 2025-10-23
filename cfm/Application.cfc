@@ -6,18 +6,8 @@
     <cfset this.sessionTimeout = createTimeSpan(0, 0, 30, 0)>
     <cfset this.setClientCookies = true>
     
-    <!--- Data source --->
+    <!--- Data source - UPDATE THIS WITH YOUR ACTUAL DATASOURCE NAME --->
     <cfset this.datasource = "yourDatasource">
-    
-    <!--- Character encoding --->
-    <cfset this.charset.web = "utf-8">
-    <cfset this.charset.resource = "utf-8">
-    
-    <!--- Error handling --->
-    <cfset this.errorTemplate = "error.cfm">
-    
-    <!--- Application mappings --->
-    <cfset this.mappings["/timekeeping"] = getDirectoryFromPath(getCurrentTemplatePath())>
     
     <!--- File upload settings --->
     <cfset this.uploadDirectory = expandPath("./uploads")>
@@ -43,12 +33,6 @@
         <cfreturn true>
     </cffunction>
     
-    <cffunction name="onSessionStart" returnType="void" output="false">
-        <!--- Initialize session variables --->
-        <cfset session.started = now()>
-        <cfset session.lastActivity = now()>
-    </cffunction>
-    
     <cffunction name="onRequestStart" returnType="boolean" output="false">
         <cfargument name="targetPage" type="string" required="true">
         
@@ -57,27 +41,12 @@
             <cfset onApplicationStart()>
         </cfif>
         
-        <!--- Update last activity --->
-        <cfif structKeyExists(session, "lastActivity")>
-            <cfset session.lastActivity = now()>
-        </cfif>
-        
         <!--- Security headers --->
         <cfheader name="X-Frame-Options" value="SAMEORIGIN">
         <cfheader name="X-Content-Type-Options" value="nosniff">
         <cfheader name="X-XSS-Protection" value="1; mode=block">
         
-        <!--- Set content type --->
-        <cfcontent type="text/html; charset=UTF-8">
-        
         <cfreturn true>
-    </cffunction>
-    
-    <cffunction name="onRequest" returnType="void" output="true">
-        <cfargument name="targetPage" type="string" required="true">
-        
-        <!--- Include the requested page --->
-        <cfinclude template="#arguments.targetPage#">
     </cffunction>
     
     <cffunction name="onError" returnType="void" output="true">
@@ -87,54 +56,50 @@
         <!--- Log error --->
         <cflog file="timekeeping_errors" 
                type="error" 
-               text="Error in #arguments.eventName#: #arguments.exception.message# - #arguments.exception.detail#">
+               text="Error in #arguments.eventName#: #arguments.exception.message#">
         
         <!--- Display friendly error message --->
         <cfoutput>
-            <div class="alert alert-danger">
-                <h4>An Error Occurred</h4>
-                <p><strong>Type:</strong> #arguments.exception.type#</p>
-                <p><strong>Message:</strong> #arguments.exception.message#</p>
-                <cfif structKeyExists(arguments.exception, "detail")>
-                    <p><strong>Detail:</strong> #arguments.exception.detail#</p>
-                </cfif>
-                <p>Please contact the system administrator if this problem persists.</p>
-            </div>
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Error</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; }
+                    .error-box { background: ##f8d7da; border: 1px solid ##f5c6cb; padding: 20px; border-radius: 5px; }
+                    .error-box h2 { color: ##721c24; margin-top: 0; }
+                    .error-detail { background: white; padding: 10px; margin-top: 10px; font-family: monospace; font-size: 12px; }
+                </style>
+            </head>
+            <body>
+                <div class="error-box">
+                    <h2>An Error Occurred</h2>
+                    <p><strong>Type:</strong> #arguments.exception.type#</p>
+                    <p><strong>Message:</strong> #arguments.exception.message#</p>
+                    <cfif structKeyExists(arguments.exception, "detail") AND arguments.exception.detail NEQ "">
+                        <div class="error-detail">
+                            <strong>Detail:</strong><br>
+                            #arguments.exception.detail#
+                        </div>
+                    </cfif>
+                    <cfif structKeyExists(arguments.exception, "sql") AND arguments.exception.sql NEQ "">
+                        <div class="error-detail">
+                            <strong>SQL:</strong><br>
+                            #arguments.exception.sql#
+                        </div>
+                    </cfif>
+                    <cfif structKeyExists(arguments.exception, "queryError") AND arguments.exception.queryError NEQ "">
+                        <div class="error-detail">
+                            <strong>Query Error:</strong><br>
+                            #arguments.exception.queryError#
+                        </div>
+                    </cfif>
+                    <p style="margin-top: 20px;">
+                        <a href="index.cfm">← Back to Home</a>
+                    </p>
+                </div>
+            </body>
+            </html>
         </cfoutput>
-    </cffunction>
-    
-    <cffunction name="onSessionEnd" returnType="void" output="false">
-        <cfargument name="sessionScope" type="struct" required="true">
-        <cfargument name="applicationScope" type="struct" required="false">
-        
-        <!--- Cleanup session-specific resources if needed --->
-    </cffunction>
-    
-    <cffunction name="onApplicationEnd" returnType="void" output="false">
-        <cfargument name="applicationScope" type="struct" required="true">
-        
-        <!--- Cleanup application resources --->
-        <!--- Clean up old uploaded files --->
-        <cftry>
-            <cfdirectory action="list" 
-                        directory="#this.uploadDirectory#" 
-                        name="oldFiles" 
-                        filter="*.xlsx|*.xls">
-            
-            <cfloop query="oldFiles">
-                <!--- Delete files older than 7 days --->
-                <cfif dateDiff("d", oldFiles.dateLastModified, now()) GT 7>
-                    <cffile action="delete" 
-                           file="#this.uploadDirectory#/#oldFiles.name#">
-                </cfif>
-            </cfloop>
-            
-            <cfcatch type="any">
-                <!--- Log cleanup error but don't throw --->
-                <cflog file="timekeeping_cleanup" 
-                       type="warning" 
-                       text="Error cleaning up old files: #cfcatch.message#">
-            </cfcatch>
-        </cftry>
     </cffunction>
 </cfcomponent>
