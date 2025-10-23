@@ -153,11 +153,10 @@
             <cfthrow message="Failed to retrieve BatchID after insert.">
         </cfif>
         
-        <!--- Read Excel file - Using your proven approach with multiple fallbacks --->
+        <!--- Read Excel file - Triple fallback approach --->
         <cfset var excelData = "">
         <cfset var sheetName = "Data">
         
-        <!--- Try reading with sheetname attribute first --->
         <cftry>
             <cfspreadsheet action="read" 
                           src="#filePath#" 
@@ -166,12 +165,7 @@
                           headerrow="1"
                           excludeHeaderRow="true">
             
-            <cflog file="timekeeping_import" 
-                   text="Batch #batchID#: Read using sheetname=#sheetName#"
-                   type="information">
-            
             <cfcatch type="any">
-                <!--- Fallback 1: Try sheet index 1 --->
                 <cftry>
                     <cfspreadsheet action="read" 
                                   src="#filePath#" 
@@ -180,21 +174,12 @@
                                   headerrow="1"
                                   excludeHeaderRow="true">
                     
-                    <cflog file="timekeeping_import" 
-                           text="Batch #batchID#: Read using sheet=1 (first sheet)"
-                           type="information">
-                    
                     <cfcatch type="any">
-                        <!--- Fallback 2: Try without sheet specification --->
                         <cfspreadsheet action="read" 
                                       src="#filePath#" 
                                       query="excelData" 
                                       headerrow="1"
                                       excludeHeaderRow="true">
-                        
-                        <cflog file="timekeeping_import" 
-                               text="Batch #batchID#: Read using default (no sheet specified)"
-                               type="information">
                     </cfcatch>
                 </cftry>
             </cfcatch>
@@ -202,45 +187,30 @@
         
         <!--- Verify we got data --->
         <cfif NOT isQuery(excelData) OR excelData.recordCount EQ 0>
-            <cfthrow message="No data found in Excel file. Please check the file format.">
+            <cfthrow message="No data found in Excel file.">
         </cfif>
         
-        <!--- Log columns found --->
-        <cflog file="timekeeping_import" 
-               text="Batch #batchID#: Found columns: #excelData.columnList#"
-               type="information">
-        
-        <!--- Process Excel data --->
-        <cfset var recordCount = 0>
-        <cfset var skippedCount = 0>
-        
-        <!--- Find Contact Name column (handles underscore conversion) --->
+        <!--- Find Contact Name column --->
         <cfset var contactNameCol = "">
         <cfset var columns = listToArray(excelData.columnList)>
         
         <cfloop array="#columns#" index="colName">
             <cfif compareNoCase(colName, "Contact_Name") EQ 0 OR 
-                  compareNoCase(colName, "Contact Name") EQ 0 OR
+                  compareNoCase(colName, "ContactName") EQ 0 OR
                   findNoCase("contact", colName) GT 0>
                 <cfset contactNameCol = colName>
                 <cfbreak>
             </cfif>
         </cfloop>
         
-        <cfif contactNameCol EQ "">
-            <!--- Fallback to column 5 if we can't find it by name --->
-            <cfif listLen(excelData.columnList) GTE 5>
-                <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
-            <cfelse>
-                <cfthrow message="Could not find Contact Name column in Excel file">
-            </cfif>
+        <cfif contactNameCol EQ "" AND listLen(excelData.columnList) GTE 5>
+            <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
         </cfif>
         
         <!--- Find Hours column --->
         <cfset var hoursCol = "">
         <cfloop array="#columns#" index="colName">
-            <cfif findNoCase("hour", colName) GT 0 OR 
-                  findNoCase("recorded", colName) GT 0>
+            <cfif findNoCase("hour", colName) GT 0 OR findNoCase("recorded", colName) GT 0>
                 <cfset hoursCol = colName>
                 <cfbreak>
             </cfif>
@@ -250,12 +220,10 @@
             <cfset hoursCol = listLast(excelData.columnList)>
         </cfif>
         
-        <!--- Log column mapping --->
-        <cflog file="timekeeping_import" 
-               text="Batch #batchID#: Using Contact column: #contactNameCol#, Hours column: #hoursCol#"
-               type="information">
-        
         <!--- Process each row --->
+        <cfset var recordCount = 0>
+        <cfset var skippedCount = 0>
+        
         <cfloop query="excelData">
             <cfset var clientContact = "">
             <cfset var clientEmail = "">
@@ -264,12 +232,12 @@
             <cfset var hours = 0>
             
             <cftry>
-                <!--- Get Contact Name value --->
+                <!--- Get Contact Name --->
                 <cfif contactNameCol NEQ "" AND isDefined("excelData.#contactNameCol#")>
                     <cfset clientContact = trim(excelData[contactNameCol][currentRow])>
                 </cfif>
                 
-                <!--- Get Hours value --->
+                <!--- Get Hours --->
                 <cfif hoursCol NEQ "" AND isDefined("excelData.#hoursCol#")>
                     <cfset var hoursValue = excelData[hoursCol][currentRow]>
                     <cfif isNumeric(hoursValue)>
@@ -283,22 +251,20 @@
                 </cfcatch>
             </cftry>
             
-            <!--- Extract email and name from contact field --->
+            <!--- Extract email and name --->
             <cfif clientContact NEQ "">
                 <!--- Extract email --->
                 <cfset var emailMatch = reMatchNoCase("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clientContact)>
                 <cfif arrayLen(emailMatch) GT 0>
                     <cfset clientEmail = lCase(trim(emailMatch[1]))>
                     
-                    <!--- Extract name: "LastName, FirstName [...]" format --->
-                    <!--- Remove everything after [ --->
+                    <!--- Extract name --->
                     <cfset var nameStr = clientContact>
                     <cfif find("[", nameStr) GT 0>
                         <cfset nameStr = left(nameStr, find("[", nameStr) - 1)>
                     </cfif>
                     <cfset nameStr = trim(nameStr)>
                     
-                    <!--- Split by comma --->
                     <cfif find(",", nameStr) GT 0>
                         <cfset var nameParts = listToArray(nameStr, ",")>
                         <cfif arrayLen(nameParts) GTE 2>
@@ -309,7 +275,7 @@
                 </cfif>
             </cfif>
             
-            <!--- Only insert if we have an email --->
+            <!--- Insert if we have an email --->
             <cfif clientEmail NEQ "">
                 <cfquery datasource="PMSD_SATS">
                     INSERT INTO dbo.TimekeepingStaging (
@@ -340,11 +306,6 @@
             </cfif>
         </cfloop>
         
-        <!--- Log processing summary --->
-        <cflog file="timekeeping_import" 
-               text="Batch #batchID#: Processed #recordCount# records, skipped #skippedCount# rows"
-               type="information">
-        
         <!--- Update batch with total records --->
         <cfquery datasource="PMSD_SATS">
             UPDATE dbo.ImportBatch
@@ -352,19 +313,160 @@
             WHERE BatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
         </cfquery>
         
-        <!--- Process and enrich data --->
-        <cfstoredproc procedure="sp_EnrichTimekeepingData" datasource="PMSD_SATS">
-            <cfprocparam value="#batchID#" cfsqltype="cf_sql_integer">
-            <cfprocresult name="enrichResult">
-        </cfstoredproc>
-        
-        <!--- Get final results --->
-        <cfquery name="finalResults" datasource="PMSD_SATS">
+        <!--- INLINE ENRICHMENT - No stored procedure needed! --->
+        <!--- Insert matched records into enriched table --->
+        <cfquery name="enrichQuery" datasource="PMSD_SATS">
+            INSERT INTO dbo.TimekeepingEnriched (
+                ImportBatchID,
+                Category,
+                ProjectMatter,
+                ClientContact,
+                ClientEmail,
+                ClientFirstName,
+                ClientLastName,
+                ClientUserID,
+                RecordedHours,
+                DirectorateNameE,
+                DirectorateNameF,
+                DirectorateAcronymE,
+                DirectorateAcronymF,
+                DirectorateID,
+                DivisionNameE,
+                DivisionNameF,
+                DivisionAcronymE,
+                DivisionAcronymF,
+                DivisionID,
+                BranchNameE,
+                BranchNameF,
+                BranchAcronymE,
+                BranchAcronymF,
+                BranchID,
+                SectionNameE,
+                SectionNameF,
+                SectionAcronymE,
+                SectionAcronymF,
+                SectionID,
+                ClientPhone,
+                PositionLevel,
+                IsManager,
+                MatchStatus,
+                ProcessedDate
+            )
             SELECT 
-                MatchedRecords,
-                UnmatchedRecords,
-                TotalRecords
-            FROM dbo.ImportBatch
+                s.ImportBatchID,
+                s.Category,
+                s.ProjectMatter,
+                s.ClientContact,
+                s.ClientEmail,
+                s.ClientFirstName,
+                s.ClientLastName,
+                u.userID,
+                s.RecordedHours,
+                u.DirectorateNameE,
+                u.DirectorateNameF,
+                u.DirectorateAcronymE,
+                u.DirectorateAcronymF,
+                u.DirectorateID,
+                u.DivisionNameE,
+                u.DivisionNameF,
+                u.DivisionAcronymE,
+                u.DivisionAcronymF,
+                u.DivisionID,
+                u.BranchNameE,
+                u.BranchNameF,
+                u.BranchAcronymE,
+                u.BranchAcronymF,
+                u.BranchID,
+                u.SectionNameE,
+                u.SectionNameF,
+                u.SectionAcronymE,
+                u.SectionAcronymF,
+                u.SectionID,
+                u.phone,
+                u.PositionLevel,
+                u.IsManager,
+                'Matched',
+                GETDATE()
+            FROM dbo.TimekeepingStaging s
+            LEFT JOIN [BRANCH_Directory].[dbo].[vUserInfo] u 
+                ON LOWER(LTRIM(RTRIM(s.ClientEmail))) = LOWER(LTRIM(RTRIM(u.userID)))
+                OR (
+                    LOWER(LTRIM(RTRIM(s.ClientFirstName))) = LOWER(LTRIM(RTRIM(u.firstName)))
+                    AND LOWER(LTRIM(RTRIM(s.ClientLastName))) = LOWER(LTRIM(RTRIM(u.lastName)))
+                )
+            WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
+                AND s.ProcessingStatus = 'Pending'
+                AND u.userID IS NOT NULL
+        </cfquery>
+        
+        <!--- Get count of matched records --->
+        <cfquery name="matchedCount" datasource="PMSD_SATS">
+            SELECT COUNT(*) AS MatchCount
+            FROM dbo.TimekeepingEnriched
+            WHERE ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
+        </cfquery>
+        
+        <!--- Update staging status for matched records --->
+        <cfquery datasource="PMSD_SATS">
+            UPDATE s
+            SET ProcessingStatus = 'Matched'
+            FROM dbo.TimekeepingStaging s
+            WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
+                AND s.ProcessingStatus = 'Pending'
+                AND EXISTS (
+                    SELECT 1 
+                    FROM dbo.TimekeepingEnriched e 
+                    WHERE e.ImportBatchID = s.ImportBatchID 
+                        AND e.ClientEmail = s.ClientEmail
+                )
+        </cfquery>
+        
+        <!--- Insert unmatched records --->
+        <cfquery datasource="PMSD_SATS">
+            INSERT INTO dbo.UnmatchedClients (
+                ImportBatchID,
+                ClientEmail,
+                ClientFirstName,
+                ClientLastName,
+                ClientContact,
+                RecordedHours
+            )
+            SELECT 
+                s.ImportBatchID,
+                s.ClientEmail,
+                s.ClientFirstName,
+                s.ClientLastName,
+                s.ClientContact,
+                s.RecordedHours
+            FROM dbo.TimekeepingStaging s
+            WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
+                AND s.ProcessingStatus = 'Pending'
+        </cfquery>
+        
+        <!--- Get count of unmatched records --->
+        <cfquery name="unmatchedCount" datasource="PMSD_SATS">
+            SELECT COUNT(*) AS UnmatchCount
+            FROM dbo.UnmatchedClients
+            WHERE ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
+        </cfquery>
+        
+        <!--- Update staging status for unmatched --->
+        <cfquery datasource="PMSD_SATS">
+            UPDATE s
+            SET ProcessingStatus = 'Unmatched',
+                ErrorMessage = 'No matching user found in directory'
+            FROM dbo.TimekeepingStaging s
+            WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
+                AND s.ProcessingStatus = 'Pending'
+        </cfquery>
+        
+        <!--- Update import batch summary --->
+        <cfquery datasource="PMSD_SATS">
+            UPDATE dbo.ImportBatch
+            SET MatchedRecords = <cfqueryparam value="#matchedCount.MatchCount#" cfsqltype="cf_sql_integer">,
+                UnmatchedRecords = <cfqueryparam value="#unmatchedCount.UnmatchCount#" cfsqltype="cf_sql_integer">,
+                ProcessingStatus = 'Completed',
+                CompletedDate = GETDATE()
             WHERE BatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
         </cfquery>
         
@@ -375,11 +477,11 @@
         <cfset result.success = true>
         <cfset result.batchID = batchID>
         <cfset result.fileName = uploadInfo.clientFile>
-        <cfset result.totalRecords = finalResults.TotalRecords>
-        <cfset result.matchedRecords = finalResults.MatchedRecords>
-        <cfset result.unmatchedRecords = finalResults.UnmatchedRecords>
-        <cfif finalResults.TotalRecords GT 0>
-            <cfset result.matchRate = (finalResults.MatchedRecords / finalResults.TotalRecords) * 100>
+        <cfset result.totalRecords = recordCount>
+        <cfset result.matchedRecords = matchedCount.MatchCount>
+        <cfset result.unmatchedRecords = unmatchedCount.UnmatchCount>
+        <cfif recordCount GT 0>
+            <cfset result.matchRate = (matchedCount.MatchCount / recordCount) * 100>
         <cfelse>
             <cfset result.matchRate = 0>
         </cfif>
@@ -388,7 +490,6 @@
             <cfset result.success = false>
             <cfset result.errorMessage = cfcatch.message & " - " & cfcatch.detail>
             
-            <!--- Log error --->
             <cflog file="timekeeping_errors" 
                    text="Error: #cfcatch.message# - #cfcatch.detail#"
                    type="error">
