@@ -1,2 +1,17 @@
-GET https://sd24rcvww6031.omega.dce-eir.net/pmsd/sats/Timetracking/cfm/css/styles.css net::ERR_ABORTED 404 (Not Found)
-index.cfm:151   GET https://sd24rcvww6031.omega.dce-eir.net/pmsd/sats/Timetracking/cfm/js/upload.js net::ERR_ABORTED 404 (Not Found)
+<cfquery name="createBatch" datasource="PMSD_SATS">
+    INSERT INTO dbo.ImportBatch (FileName, ImportedBy, Notes, TotalRecords)
+    VALUES (
+        <cfqueryparam value="#uploadInfo.clientFile#" cfsqltype="cf_sql_varchar">,
+        <cfqueryparam value="#form.importedBy#" cfsqltype="cf_sql_varchar" null="#trim(form.importedBy) EQ ''#">,
+        <cfqueryparam value="#form.notes#" cfsqltype="cf_sql_varchar" null="#trim(form.notes) EQ ''#">,
+        0
+    );
+    SELECT SCOPE_IDENTITY() AS BatchID;
+</cfquery>
+
+<!--- get BatchID from the returned query --->
+<cfif createBatch.recordCount GT 0>
+    <cfset var batchID = createBatch.BatchID[1]>
+<cfelse>
+    <cfthrow message="Failed to retrieve BatchID after insert.">
+</cfif>
