@@ -71,7 +71,7 @@
                                        accept=".xlsx,.xls" 
                                        required>
                                 <div class="form-text">
-                                    Upload your timekeeping report Excel file. The system will automatically match clients with directorate information.
+                                    Upload your timekeeping report Excel file with columns: Client, Service, File #, Contact Name, etc.
                                 </div>
                             </div>
 
@@ -220,43 +220,112 @@
         
         <cfset var batchID = batchResult.IDENTITYCOL>
         
-        <!--- Read Excel file --->
+        <!--- Read Excel file with proper header row --->
         <cfspreadsheet action="read" 
                       src="#filePath#" 
                       query="excelData" 
-                      headerrow="3"
+                      headerrow="1"
                       excludeHeaderRow="true">
         
-        <!--- Process Excel data --->
+        <!--- Process Excel data - NEW LOGIC FOR TABULAR FORMAT --->
         <cfset var recordCount = 0>
-        <cfset var currentCategory = "">
-        <cfset var currentProject = "">
         
-        <cfloop query="excelData">
-            <cfset var rowLabel = trim(excelData["col_1"][currentRow])>
-            <cfset var hours = excelData["col_2"][currentRow]>
-            
-            <!--- Skip empty rows --->
-            <cfif rowLabel EQ "" OR NOT isNumeric(hours)>
-                <cfcontinue>
+        <!--- Map column names (handle variations) --->
+        <cfset var clientCol = "">
+        <cfset var serviceCol = "">
+        <cfset var fileNumCol = "">
+        <cfset var fileNameCol = "">
+        <cfset var contactNameCol = "">
+        <cfset var hoursCol = "">
+        
+        <!--- Find the correct column names --->
+        <cfloop list="#excelData.columnList#" index="colName">
+            <cfif findNoCase("client", colName) AND clientCol EQ "">
+                <cfset clientCol = colName>
             </cfif>
+            <cfif findNoCase("service", colName) AND serviceCol EQ "">
+                <cfset serviceCol = colName>
+            </cfif>
+            <cfif (findNoCase("file", colName) AND findNoCase("##", colName)) OR findNoCase("file_num", colName)>
+                <cfset fileNumCol = colName>
+            </cfif>
+            <cfif (findNoCase("file", colName) AND findNoCase("name", colName)) OR findNoCase("file_name", colName)>
+                <cfset fileNameCol = colName>
+            </cfif>
+            <cfif findNoCase("contact", colName) AND findNoCase("name", colName)>
+                <cfset contactNameCol = colName>
+            </cfif>
+            <cfif findNoCase("hour", colName) OR findNoCase("recorded_hour", colName)>
+                <cfset hoursCol = colName>
+            </cfif>
+        </cfloop>
+        
+        <!--- If columns not found, use first few columns as defaults --->
+        <cfif clientCol EQ "">
+            <cfset clientCol = listGetAt(excelData.columnList, 1)>
+        </cfif>
+        <cfif serviceCol EQ "" AND listLen(excelData.columnList) GT 1>
+            <cfset serviceCol = listGetAt(excelData.columnList, 2)>
+        </cfif>
+        <cfif contactNameCol EQ "" AND listLen(excelData.columnList) GT 4>
+            <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
+        </cfif>
+        <cfif hoursCol EQ "">
+            <!--- Try to find last column that might have hours --->
+            <cfset hoursCol = listLast(excelData.columnList)>
+        </cfif>
+        
+        <!--- Process each row --->
+        <cfloop query="excelData">
+            <cfset var category = "">
+            <cfset var projectMatter = "">
+            <cfset var clientContact = "">
+            <cfset var clientEmail = "">
+            <cfset var firstName = "">
+            <cfset var lastName = "">
+            <cfset var hours = 0>
             
-            <!--- Determine if this is a category, project, or client --->
-            <cfset var isEmail = findNoCase("@", rowLabel) GT 0>
-            
-            <cfif isEmail>
-                <!--- This is a client row --->
-                <cfset var emailMatch = reMatchNoCase("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", rowLabel)>
-                <cfset var clientEmail = "">
-                <cfset var clientName = "">
-                <cfset var firstName = "">
-                <cfset var lastName = "">
+            <!--- Get values --->
+            <cftry>
+                <cfif clientCol NEQ "" AND isDefined("excelData.#clientCol#")>
+                    <cfset category = trim(excelData[clientCol][currentRow])>
+                </cfif>
                 
+                <cfif serviceCol NEQ "" AND isDefined("excelData.#serviceCol#")>
+                    <cfset var serviceValue = trim(excelData[serviceCol][currentRow])>
+                    <cfif fileNameCol NEQ "" AND isDefined("excelData.#fileNameCol#")>
+                        <cfset var fileNameValue = trim(excelData[fileNameCol][currentRow])>
+                        <cfset projectMatter = serviceValue & " - " & fileNameValue>
+                    <cfelse>
+                        <cfset projectMatter = serviceValue>
+                    </cfif>
+                </cfif>
+                
+                <cfif contactNameCol NEQ "" AND isDefined("excelData.#contactNameCol#")>
+                    <cfset clientContact = trim(excelData[contactNameCol][currentRow])>
+                </cfif>
+                
+                <cfif hoursCol NEQ "" AND isDefined("excelData.#hoursCol#")>
+                    <cfset var hoursValue = excelData[hoursCol][currentRow]>
+                    <cfif isNumeric(hoursValue)>
+                        <cfset hours = hoursValue>
+                    </cfif>
+                </cfif>
+                
+                <cfcatch>
+                    <!--- Skip rows with errors --->
+                    <cfcontinue>
+                </cfcatch>
+            </cftry>
+            
+            <!--- Extract email from contact field --->
+            <cfif clientContact NEQ "">
+                <cfset var emailMatch = reMatchNoCase("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clientContact)>
                 <cfif arrayLen(emailMatch) GT 0>
                     <cfset clientEmail = emailMatch[1]>
                     
-                    <!--- Extract name --->
-                    <cfset var nameMatch = reMatchNoCase("([A-Z][a-z]+),\s*([A-Z][a-z]+)", rowLabel)>
+                    <!--- Extract name (format: "LastName, FirstName [...]") --->
+                    <cfset var nameMatch = reMatchNoCase("([A-Z][a-z]+),\s*([A-Z][a-z]+)", clientContact)>
                     <cfif arrayLen(nameMatch) GT 0>
                         <cfset var nameParts = listToArray(nameMatch[1], ",")>
                         <cfif arrayLen(nameParts) EQ 2>
@@ -264,39 +333,35 @@
                             <cfset firstName = trim(nameParts[2])>
                         </cfif>
                     </cfif>
-                    
-                    <!--- Insert into staging --->
-                    <cfquery datasource="yourDatasource">
-                        INSERT INTO dbo.TimekeepingStaging (
-                            ImportBatchID,
-                            RowNumber,
-                            Category,
-                            ProjectMatter,
-                            ClientContact,
-                            ClientEmail,
-                            ClientFirstName,
-                            ClientLastName,
-                            RecordedHours
-                        ) VALUES (
-                            <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">,
-                            <cfqueryparam value="#currentRow#" cfsqltype="cf_sql_integer">,
-                            <cfqueryparam value="#currentCategory#" cfsqltype="cf_sql_varchar">,
-                            <cfqueryparam value="#currentProject#" cfsqltype="cf_sql_varchar">,
-                            <cfqueryparam value="#rowLabel#" cfsqltype="cf_sql_varchar">,
-                            <cfqueryparam value="#clientEmail#" cfsqltype="cf_sql_varchar">,
-                            <cfqueryparam value="#firstName#" cfsqltype="cf_sql_varchar">,
-                            <cfqueryparam value="#lastName#" cfsqltype="cf_sql_varchar">,
-                            <cfqueryparam value="#hours#" cfsqltype="cf_sql_decimal">
-                        )
-                    </cfquery>
-                    <cfset recordCount = recordCount + 1>
                 </cfif>
-            <cfelseif hours GT 100>
-                <!--- Likely a category (high hours) --->
-                <cfset currentCategory = rowLabel>
-            <cfelse>
-                <!--- Likely a project --->
-                <cfset currentProject = rowLabel>
+            </cfif>
+            
+            <!--- Only insert if we have minimum required data --->
+            <cfif clientEmail NEQ "" OR (firstName NEQ "" AND lastName NEQ "")>
+                <cfquery datasource="yourDatasource">
+                    INSERT INTO dbo.TimekeepingStaging (
+                        ImportBatchID,
+                        RowNumber,
+                        Category,
+                        ProjectMatter,
+                        ClientContact,
+                        ClientEmail,
+                        ClientFirstName,
+                        ClientLastName,
+                        RecordedHours
+                    ) VALUES (
+                        <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">,
+                        <cfqueryparam value="#currentRow#" cfsqltype="cf_sql_integer">,
+                        <cfqueryparam value="#category#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#projectMatter#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#clientContact#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#clientEmail#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#firstName#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#lastName#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#hours#" cfsqltype="cf_sql_decimal">
+                    )
+                </cfquery>
+                <cfset recordCount = recordCount + 1>
             </cfif>
         </cfloop>
         
@@ -333,7 +398,11 @@
         <cfset result.totalRecords = finalResults.TotalRecords>
         <cfset result.matchedRecords = finalResults.MatchedRecords>
         <cfset result.unmatchedRecords = finalResults.UnmatchedRecords>
-        <cfset result.matchRate = (finalResults.MatchedRecords / finalResults.TotalRecords) * 100>
+        <cfif finalResults.TotalRecords GT 0>
+            <cfset result.matchRate = (finalResults.MatchedRecords / finalResults.TotalRecords) * 100>
+        <cfelse>
+            <cfset result.matchRate = 0>
+        </cfif>
         
         <cfcatch type="any">
             <cfset result.success = false>
