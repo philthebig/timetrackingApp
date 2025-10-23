@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Timekeeping Import Tool - Test Version</title>
+    <title>Timekeeping Import Tool</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 </head>
@@ -11,7 +11,7 @@
     <nav class="navbar navbar-dark bg-primary">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h1">
-                <i class="fas fa-clock"></i> Timekeeping Import & Analytics (Test Version)
+                <i class="fas fa-clock"></i> Timekeeping Import & Analytics
             </span>
         </div>
     </nav>
@@ -20,16 +20,7 @@
         <div class="row">
             <div class="col-md-8 offset-md-2">
                 
-                <!--- Debug: Show if form was submitted --->
                 <cfif structKeyExists(form, "uploadFile")>
-                    <div class="alert alert-info">
-                        <h5>Form Submitted - Processing...</h5>
-                        <cfoutput>
-                            <p>Form keys: #structKeyList(form)#</p>
-                            <p>File field exists: #structKeyExists(form, "uploadFile")#</p>
-                        </cfoutput>
-                    </div>
-                    
                     <cftry>
                         <cfset uploadResult = processUpload()>
                         
@@ -44,6 +35,10 @@
                                     <p><strong>Matched Records:</strong> #uploadResult.matchedRecords#</p>
                                     <p><strong>Unmatched Records:</strong> #uploadResult.unmatchedRecords#</p>
                                     <p><strong>Match Rate:</strong> #numberFormat(uploadResult.matchRate, "99.9")#%</p>
+                                    <hr>
+                                    <a href="dashboard.cfm?batch=#uploadResult.batchID#" class="btn btn-primary">
+                                        View Dashboard <i class="fas fa-arrow-right"></i>
+                                    </a>
                                 </cfoutput>
                             </div>
                         <cfelse>
@@ -63,7 +58,10 @@
                                     <p><strong>Message:</strong> #cfcatch.message#</p>
                                     <p><strong>Detail:</strong> #cfcatch.detail#</p>
                                     <cfif structKeyExists(cfcatch, "sql")>
-                                        <p><strong>SQL:</strong> <pre>#cfcatch.sql#</pre></p>
+                                        <div style="background: white; padding: 10px; margin-top: 10px;">
+                                            <strong>SQL:</strong><br>
+                                            <pre>#cfcatch.sql#</pre>
+                                        </div>
                                     </cfif>
                                 </cfoutput>
                             </div>
@@ -73,7 +71,7 @@
 
                 <div class="card shadow">
                     <div class="card-header bg-primary text-white">
-                        <h4><i class="fas fa-file-excel"></i> Import Timekeeping Data (Simple Test Version)</h4>
+                        <h4><i class="fas fa-file-excel"></i> Import Timekeeping Data</h4>
                     </div>
                     <div class="card-body">
                         <form action="index.cfm" method="post" enctype="multipart/form-data">
@@ -88,7 +86,7 @@
                                        accept=".xlsx,.xls" 
                                        required>
                                 <div class="form-text">
-                                    Upload your timekeeping report Excel file.
+                                    Upload your timekeeping report. Data should be in the "data" sheet.
                                 </div>
                             </div>
 
@@ -115,7 +113,7 @@
                             </div>
 
                             <button type="submit" class="btn btn-primary btn-lg w-100">
-                                <i class="fas fa-upload"></i> Upload and Process (No JS)
+                                <i class="fas fa-upload"></i> Upload and Process
                             </button>
                         </form>
                     </div>
@@ -125,7 +123,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <!--- NO CUSTOM JAVASCRIPT - Pure form submission --->
 </body>
 </html>
 
@@ -143,54 +140,97 @@
         
         <cfset var filePath = uploadInfo.serverDirectory & "/" & uploadInfo.serverFile>
         
-        <!--- Create import batch record --->
-        <cfquery name="createBatch" datasource="PMSD_SATS" result="batchResult">
+        <!--- Create import batch record - FIXED VERSION --->
+        <cfquery name="createBatch" datasource="PMSD_SATS">
             INSERT INTO dbo.ImportBatch (FileName, ImportedBy, Notes, TotalRecords)
             VALUES (
                 <cfqueryparam value="#uploadInfo.clientFile#" cfsqltype="cf_sql_varchar">,
                 <cfqueryparam value="#form.importedBy#" cfsqltype="cf_sql_varchar" null="#trim(form.importedBy) EQ ''#">,
                 <cfqueryparam value="#form.notes#" cfsqltype="cf_sql_varchar" null="#trim(form.notes) EQ ''#">,
                 0
-            )
-            SELECT SCOPE_IDENTITY() AS BatchID
+            );
+            SELECT SCOPE_IDENTITY() AS BatchID;
         </cfquery>
         
-        <cfset var batchID = batchResult.IDENTITYCOL>
+        <!--- Get BatchID from the returned query - FIXED --->
+        <cfif createBatch.recordCount GT 0>
+            <cfset var batchID = createBatch.BatchID[1]>
+        <cfelse>
+            <cfthrow message="Failed to retrieve BatchID after insert.">
+        </cfif>
         
-        <!--- Read Excel file with proper header row --->
+        <!--- Read Excel file from "data" sheet - FIXED --->
         <cfspreadsheet action="read" 
                       src="#filePath#" 
                       query="excelData" 
+                      sheet="data"
                       headerrow="1"
                       excludeHeaderRow="true">
         
+        <!--- Debug: Show what columns were found --->
+        <cflog file="timekeeping_import" 
+               text="Batch #batchID#: Found columns: #excelData.columnList#"
+               type="information">
+        
         <!--- Process Excel data - TABULAR FORMAT --->
         <cfset var recordCount = 0>
+        <cfset var skippedCount = 0>
         
-        <!--- Map column names --->
+        <!--- Map column names (case-insensitive search) --->
+        <cfset var clientCol = "">
+        <cfset var serviceCol = "">
+        <cfset var fileNumCol = "">
+        <cfset var fileNameCol = "">
         <cfset var contactNameCol = "">
         <cfset var hoursCol = "">
         
         <!--- Find the correct column names --->
         <cfloop list="#excelData.columnList#" index="colName">
-            <cfif findNoCase("contact", colName) AND findNoCase("name", colName)>
+            <cfset var colNameLower = lCase(trim(colName))>
+            
+            <cfif findNoCase("client", colNameLower) AND clientCol EQ "">
+                <cfset clientCol = colName>
+            </cfif>
+            <cfif findNoCase("service", colNameLower) AND serviceCol EQ "">
+                <cfset serviceCol = colName>
+            </cfif>
+            <cfif (findNoCase("file", colNameLower) AND findNoCase("#", colNameLower)) OR findNoCase("file_num", colNameLower)>
+                <cfset fileNumCol = colName>
+            </cfif>
+            <cfif (findNoCase("file", colNameLower) AND findNoCase("name", colNameLower)) OR findNoCase("file_name", colNameLower)>
+                <cfset fileNameCol = colName>
+            </cfif>
+            <cfif findNoCase("contact", colNameLower) AND findNoCase("name", colNameLower)>
                 <cfset contactNameCol = colName>
             </cfif>
-            <cfif findNoCase("hour", colName) OR findNoCase("recorded", colName)>
+            <cfif findNoCase("hour", colNameLower) OR findNoCase("recorded", colNameLower)>
                 <cfset hoursCol = colName>
             </cfif>
         </cfloop>
         
-        <!--- Default to first and last columns if not found --->
-        <cfif contactNameCol EQ "">
-            <cfset contactNameCol = listGetAt(excelData.columnList, min(5, listLen(excelData.columnList)))>
+        <!--- If columns not found by name, use position --->
+        <cfif clientCol EQ "" AND listLen(excelData.columnList) GTE 1>
+            <cfset clientCol = listGetAt(excelData.columnList, 1)>
+        </cfif>
+        <cfif serviceCol EQ "" AND listLen(excelData.columnList) GTE 2>
+            <cfset serviceCol = listGetAt(excelData.columnList, 2)>
+        </cfif>
+        <cfif contactNameCol EQ "" AND listLen(excelData.columnList) GTE 5>
+            <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
         </cfif>
         <cfif hoursCol EQ "">
             <cfset hoursCol = listLast(excelData.columnList)>
         </cfif>
         
+        <!--- Log column mapping --->
+        <cflog file="timekeeping_import" 
+               text="Batch #batchID#: Column mapping - Client:#clientCol#, Service:#serviceCol#, Contact:#contactNameCol#, Hours:#hoursCol#"
+               type="information">
+        
         <!--- Process each row --->
         <cfloop query="excelData">
+            <cfset var category = "">
+            <cfset var projectMatter = "">
             <cfset var clientContact = "">
             <cfset var clientEmail = "">
             <cfset var firstName = "">
@@ -199,10 +239,28 @@
             
             <!--- Get values --->
             <cftry>
+                <!--- Client/Category --->
+                <cfif clientCol NEQ "" AND isDefined("excelData.#clientCol#")>
+                    <cfset category = trim(excelData[clientCol][currentRow])>
+                </cfif>
+                
+                <!--- Service/Project --->
+                <cfif serviceCol NEQ "" AND isDefined("excelData.#serviceCol#")>
+                    <cfset var serviceValue = trim(excelData[serviceCol][currentRow])>
+                    <cfif fileNameCol NEQ "" AND isDefined("excelData.#fileNameCol#")>
+                        <cfset var fileNameValue = trim(excelData[fileNameCol][currentRow])>
+                        <cfset projectMatter = serviceValue & " - " & fileNameValue>
+                    <cfelse>
+                        <cfset projectMatter = serviceValue>
+                    </cfif>
+                </cfif>
+                
+                <!--- Contact Name (contains email) --->
                 <cfif contactNameCol NEQ "" AND isDefined("excelData.#contactNameCol#")>
                     <cfset clientContact = trim(excelData[contactNameCol][currentRow])>
                 </cfif>
                 
+                <!--- Hours --->
                 <cfif hoursCol NEQ "" AND isDefined("excelData.#hoursCol#")>
                     <cfset var hoursValue = excelData[hoursCol][currentRow]>
                     <cfif isNumeric(hoursValue)>
@@ -211,6 +269,8 @@
                 </cfif>
                 
                 <cfcatch>
+                    <!--- Skip rows with errors --->
+                    <cfset skippedCount = skippedCount + 1>
                     <cfcontinue>
                 </cfcatch>
             </cftry>
@@ -219,10 +279,10 @@
             <cfif clientContact NEQ "">
                 <cfset var emailMatch = reMatchNoCase("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clientContact)>
                 <cfif arrayLen(emailMatch) GT 0>
-                    <cfset clientEmail = emailMatch[1]>
+                    <cfset clientEmail = lCase(trim(emailMatch[1]))>
                     
-                    <!--- Extract name --->
-                    <cfset var nameMatch = reMatchNoCase("([A-Z][a-z]+),\s*([A-Z][a-z]+)", clientContact)>
+                    <!--- Extract name (format: "LastName, FirstName [...]") --->
+                    <cfset var nameMatch = reMatchNoCase("([A-Za-z\-]+),\s*([A-Za-z\-]+)", clientContact)>
                     <cfif arrayLen(nameMatch) GT 0>
                         <cfset var nameParts = listToArray(nameMatch[1], ",")>
                         <cfif arrayLen(nameParts) EQ 2>
@@ -233,7 +293,7 @@
                 </cfif>
             </cfif>
             
-            <!--- Only insert if we have minimum required data --->
+            <!--- Only insert if we have an email address --->
             <cfif clientEmail NEQ "">
                 <cfquery datasource="PMSD_SATS">
                     INSERT INTO dbo.TimekeepingStaging (
@@ -249,8 +309,8 @@
                     ) VALUES (
                         <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">,
                         <cfqueryparam value="#currentRow#" cfsqltype="cf_sql_integer">,
-                        <cfqueryparam value="" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#category#" cfsqltype="cf_sql_varchar">,
+                        <cfqueryparam value="#projectMatter#" cfsqltype="cf_sql_varchar">,
                         <cfqueryparam value="#clientContact#" cfsqltype="cf_sql_varchar">,
                         <cfqueryparam value="#clientEmail#" cfsqltype="cf_sql_varchar">,
                         <cfqueryparam value="#firstName#" cfsqltype="cf_sql_varchar">,
@@ -259,8 +319,15 @@
                     )
                 </cfquery>
                 <cfset recordCount = recordCount + 1>
+            <cfelse>
+                <cfset skippedCount = skippedCount + 1>
             </cfif>
         </cfloop>
+        
+        <!--- Log processing summary --->
+        <cflog file="timekeeping_import" 
+               text="Batch #batchID#: Processed #recordCount# records, skipped #skippedCount# rows"
+               type="information">
         
         <!--- Update batch with total records --->
         <cfquery datasource="PMSD_SATS">
@@ -304,6 +371,11 @@
         <cfcatch type="any">
             <cfset result.success = false>
             <cfset result.errorMessage = cfcatch.message & " - " & cfcatch.detail>
+            
+            <!--- Log error --->
+            <cflog file="timekeeping_errors" 
+                   text="Batch #batchID#: #cfcatch.message# - #cfcatch.detail#"
+                   type="error">
         </cfcatch>
     </cftry>
     
