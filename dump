@@ -1,8 +1,38 @@
-An Error Occurred
-Type: Database
+<h1>Setup Test</h1>
 
-Message: Event handler exception.
+<h2>Test 1: PMSD_SATS Connection</h2>
+<cftry>
+    <cfquery name="test1" datasource="PMSD_SATS">
+        SELECT COUNT(*) AS TableCount
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_NAME IN ('ImportBatch', 'TimekeepingStaging')
+    </cfquery>
+    <cfoutput>
+        <p>✅ Connected to PMSD_SATS</p>
+        <p>Tables found: #test1.TableCount# (should be 2)</p>
+    </cfoutput>
+    <cfcatch>
+        <cfoutput>
+            <p>❌ Error: #cfcatch.message#</p>
+        </cfoutput>
+    </cfcatch>
+</cftry>
 
-Detail: An exception occurred while invoking an event handler method from Application.cfc. The method name is: onRequest.
-
-Please contact the system administrator if this problem persists.
+<h2>Test 2: BRANCH_Directory Access</h2>
+<cftry>
+    <cfquery name="test2" datasource="PMSD_SATS">
+        SELECT TOP 1 userID, firstName, lastName
+        FROM [BRANCH_Directory].[dbo].[vUserInfo]
+    </cfquery>
+    <cfoutput>
+        <p>✅ Can access BRANCH_Directory from PMSD_SATS</p>
+        <p>Sample user: #test2.firstName# #test2.lastName#</p>
+    </cfoutput>
+    <cfcatch>
+        <cfoutput>
+            <p>❌ Cannot access BRANCH_Directory</p>
+            <p>Error: #cfcatch.message#</p>
+            <p><strong>Action needed:</strong> Request cross-database permissions from DBA</p>
+        </cfoutput>
+    </cfcatch>
+</cftry>
