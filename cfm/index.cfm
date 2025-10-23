@@ -140,7 +140,7 @@
         
         <cfset var filePath = uploadInfo.serverDirectory & "/" & uploadInfo.serverFile>
         
-        <!--- Create import batch record - FIXED VERSION --->
+        <!--- Create import batch record --->
         <cfquery name="createBatch" datasource="PMSD_SATS">
             INSERT INTO dbo.ImportBatch (FileName, ImportedBy, Notes, TotalRecords)
             VALUES (
@@ -152,14 +152,14 @@
             SELECT SCOPE_IDENTITY() AS BatchID;
         </cfquery>
         
-        <!--- Get BatchID from the returned query - FIXED --->
+        <!--- Get BatchID from the returned query --->
         <cfif createBatch.recordCount GT 0>
             <cfset var batchID = createBatch.BatchID[1]>
         <cfelse>
             <cfthrow message="Failed to retrieve BatchID after insert.">
         </cfif>
         
-        <!--- Read Excel file from "data" sheet - FIXED --->
+        <!--- Read Excel file from "data" sheet --->
         <cfspreadsheet action="read" 
                       src="#filePath#" 
                       query="excelData" 
@@ -167,12 +167,12 @@
                       headerrow="1"
                       excludeHeaderRow="true">
         
-        <!--- Debug: Show what columns were found --->
+        <!--- Debug: Log columns found --->
         <cflog file="timekeeping_import" 
                text="Batch #batchID#: Found columns: #excelData.columnList#"
                type="information">
         
-        <!--- Process Excel data - TABULAR FORMAT --->
+        <!--- Process Excel data --->
         <cfset var recordCount = 0>
         <cfset var skippedCount = 0>
         
@@ -194,10 +194,11 @@
             <cfif findNoCase("service", colNameLower) AND serviceCol EQ "">
                 <cfset serviceCol = colName>
             </cfif>
-            <cfif (findNoCase("file", colNameLower) AND findNoCase("#", colNameLower)) OR findNoCase("file_num", colNameLower)>
+            <!--- FIXED: Escape the # symbol using Chr(35) --->
+            <cfif (findNoCase("file", colNameLower) AND find(chr(35), colNameLower)) OR findNoCase("file_num", colNameLower) OR findNoCase("filenum", colNameLower)>
                 <cfset fileNumCol = colName>
             </cfif>
-            <cfif (findNoCase("file", colNameLower) AND findNoCase("name", colNameLower)) OR findNoCase("file_name", colNameLower)>
+            <cfif (findNoCase("file", colNameLower) AND findNoCase("name", colNameLower)) OR findNoCase("file_name", colNameLower) OR findNoCase("filename", colNameLower)>
                 <cfset fileNameCol = colName>
             </cfif>
             <cfif findNoCase("contact", colNameLower) AND findNoCase("name", colNameLower)>
@@ -224,7 +225,7 @@
         
         <!--- Log column mapping --->
         <cflog file="timekeeping_import" 
-               text="Batch #batchID#: Column mapping - Client:#clientCol#, Service:#serviceCol#, Contact:#contactNameCol#, Hours:#hoursCol#"
+               text="Batch #batchID#: Mapped columns - Client:#clientCol#, Service:#serviceCol#, Contact:#contactNameCol#, Hours:#hoursCol#"
                type="information">
         
         <!--- Process each row --->
