@@ -47,7 +47,7 @@
         <cfquery name="stats" datasource="PMSD_SATS">
             SELECT 
                 COUNT(DISTINCT ImportBatchID) AS TotalBatches,
-                SUM(RecordedHours) AS TotalHours,
+                ISNULL(SUM(RecordedHours), 0) AS TotalHours,
                 COUNT(*) AS TotalRecords
             FROM dbo.TimekeepingEnriched
             <cfif batchFilter GT 0>
@@ -60,13 +60,13 @@
             SELECT 
                 ISNULL(DirectorateNameE, 'Unknown') AS Directorate,
                 COUNT(*) AS RecordCount,
-                SUM(RecordedHours) AS TotalHours
+                ISNULL(SUM(RecordedHours), 0) AS TotalHours
             FROM dbo.TimekeepingEnriched
             <cfif batchFilter GT 0>
                 WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer">
             </cfif>
             GROUP BY DirectorateNameE
-            ORDER BY TotalHours DESC
+            ORDER BY SUM(RecordedHours) DESC
         </cfquery>
         
         <!--- Unmatched clients with pagination --->
@@ -98,6 +98,14 @@
             OFFSET <cfqueryparam value="#startRow - 1#" cfsqltype="cf_sql_integer"> ROWS
             FETCH NEXT <cfqueryparam value="#pageSize#" cfsqltype="cf_sql_integer"> ROWS ONLY
         </cfquery>
+        
+        <!--- Build chart data as CF arrays (for safe JSON serialization) --->
+        <cfset chartLabels = []>
+        <cfset chartData = []>
+        <cfloop query="directorateStats">
+            <cfset arrayAppend(chartLabels, Directorate)>
+            <cfset arrayAppend(chartData, TotalHours)>
+        </cfloop>
         
         <!--- Header with batch info --->
         <div class="row mb-4">
@@ -151,28 +159,30 @@
         </div>
         
         <!--- Charts Row --->
-        <div class="row mb-4">
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-header bg-primary text-white">
-                        <h5><i class="fas fa-chart-bar"></i> Hours by Directorate</h5>
+        <cfif directorateStats.recordCount GT 0>
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <h5><i class="fas fa-chart-bar"></i> Hours by Directorate</h5>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="directorateChart" height="300"></canvas>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <canvas id="directorateChart" height="300"></canvas>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <h5><i class="fas fa-chart-pie"></i> Distribution</h5>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="distributionChart" height="300"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-header bg-primary text-white">
-                        <h5><i class="fas fa-chart-pie"></i> Distribution</h5>
-                    </div>
-                    <div class="card-body">
-                        <canvas id="distributionChart" height="300"></canvas>
-                    </div>
-                </div>
-            </div>
-        </div>
+        </cfif>
         
         <!--- Unmatched Clients Table with Pagination --->
         <cfif unmatchedCount.TotalCount GT 0>
@@ -315,38 +325,72 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Directorate Chart
-        const dirData = {
-            labels: [<cfoutput query="directorateStats">'#Directorate#'<cfif currentRow LT recordCount>,</cfif></cfoutput>],
-            datasets: [{
-                label: 'Hours',
-                data: [<cfoutput query="directorateStats">#TotalHours#<cfif currentRow LT recordCount>,</cfif></cfoutput>],
-                backgroundColor: ['#0d6efd', '#6c757d', '#198754', '#dc3545', '#ffc107', '#0dcaf0', '#d63384', '#fd7e14']
-            }]
-        };
-        
-        new Chart(document.getElementById('directorateChart'), {
-            type: 'bar',
-            data: dirData,
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false }
+    
+    <!--- Only load charts if there's data --->
+    <cfif directorateStats.recordCount GT 0>
+        <script>
+            // Chart data from ColdFusion (using serializeJSON for safe output)
+            const chartLabels = <cfoutput>#serializeJSON(chartLabels)#</cfoutput>;
+            const chartValues = <cfoutput>#serializeJSON(chartData)#</cfoutput>;
+            
+            // Directorate Chart
+            const dirData = {
+                labels: chartLabels,
+                datasets: [{
+                    label: 'Hours',
+                    data: chartValues,
+                    backgroundColor: [
+                        '#0d6efd', '#6c757d', '#198754', '#dc3545', 
+                        '#ffc107', '#0dcaf0', '#d63384', '#fd7e14'
+                    ]
+                }]
+            };
+            
+            // Create Bar Chart
+            new Chart(document.getElementById('directorateChart'), {
+                type: 'bar',
+                data: dirData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        title: {
+                            display: true,
+                            text: 'Total Hours by Directorate'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Hours'
+                            }
+                        }
+                    }
                 }
-            }
-        });
-        
-        // Distribution Pie Chart
-        new Chart(document.getElementById('distributionChart'), {
-            type: 'pie',
-            data: dirData,
-            options: {
-                responsive: true,
-                maintainAspectRatio: false
-            }
-        });
-    </script>
+            });
+            
+            // Create Pie Chart
+            new Chart(document.getElementById('distributionChart'), {
+                type: 'pie',
+                data: dirData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right'
+                        },
+                        title: {
+                            display: true,
+                            text: 'Hours Distribution'
+                        }
+                    }
+                }
+            });
+        </script>
+    </cfif>
 </body>
 </html>
