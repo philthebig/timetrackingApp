@@ -82,12 +82,19 @@
         <cfset totalPages = ceiling(unmatchedCount.TotalCount / pageSize)>
         
         <cfquery name="unmatched" datasource="PMSD_SATS">
-            SELECT ClientEmail, ClientFirstName, ClientLastName, ClientContact, RecordedHours, CreatedDate
+            SELECT 
+                UnmatchedID,
+                ImportBatchID,
+                ClientEmail, 
+                ClientFirstName, 
+                ClientLastName, 
+                ClientContact, 
+                RecordedHours
             FROM dbo.UnmatchedClients
             <cfif batchFilter GT 0>
                 WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer">
             </cfif>
-            ORDER BY CreatedDate DESC
+            ORDER BY UnmatchedID DESC
             OFFSET <cfqueryparam value="#startRow - 1#" cfsqltype="cf_sql_integer"> ROWS
             FETCH NEXT <cfqueryparam value="#pageSize#" cfsqltype="cf_sql_integer"> ROWS ONLY
         </cfquery>
@@ -184,6 +191,15 @@
                                 Please verify email addresses or names.
                             </div>
                             
+                            <!--- Export Button at Top --->
+                            <div class="text-center mb-3">
+                                <cfoutput>
+                                    <a href="export.cfm?type=unmatched&batch=#batchFilter#" class="btn btn-warning btn-lg">
+                                        <i class="fas fa-download"></i> Export All Unmatched (#unmatchedCount.TotalCount#)
+                                    </a>
+                                </cfoutput>
+                            </div>
+                            
                             <div class="table-responsive">
                                 <table class="table table-striped table-hover">
                                     <thead>
@@ -193,7 +209,6 @@
                                             <th>Last Name</th>
                                             <th>Full Contact Info</th>
                                             <th>Hours</th>
-                                            <th>Date</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -204,7 +219,6 @@
                                                 <td>#ClientLastName#</td>
                                                 <td><small>#ClientContact#</small></td>
                                                 <td>#numberFormat(RecordedHours, "999.99")#</td>
-                                                <td><small>#dateFormat(CreatedDate, "yyyy-mm-dd")#</small></td>
                                             </tr>
                                         </cfoutput>
                                     </tbody>
@@ -255,10 +269,10 @@
                                 </cfoutput>
                             </cfif>
                             
-                            <!--- Export Unmatched Button --->
+                            <!--- Export Button at Bottom Too --->
                             <div class="text-center mt-3">
                                 <cfoutput>
-                                    <a href="export.cfm?type=unmatched&batch=#batchFilter#" class="btn btn-warning">
+                                    <a href="export.cfm?type=unmatched&batch=#batchFilter#" class="btn btn-warning btn-lg">
                                         <i class="fas fa-download"></i> Export All Unmatched (#unmatchedCount.TotalCount#)
                                     </a>
                                 </cfoutput>
