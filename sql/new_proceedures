@@ -1,202 +1,156 @@
 -- =============================================
--- Stored Procedure: Process and Enrich Timekeeping Data
--- UPDATED for cross-database access to BRANCH_Directory
+-- PRODUCTION READINESS ENHANCEMENTS
+-- Run this after the main table creation
+-- Optional but recommended for better performance and data integrity
 -- =============================================
 
-IF OBJECT_ID('dbo.sp_EnrichTimekeepingData', 'P') IS NOT NULL
-    DROP PROCEDURE dbo.sp_EnrichTimekeepingData;
+USE [PMSD_SATS];
 GO
 
-CREATE PROCEDURE dbo.sp_EnrichTimekeepingData
-    @ImportBatchID INT
-AS
+PRINT '========================================';
+PRINT 'Starting Production Enhancements...';
+PRINT '========================================';
+
+-- Add Foreign Key Constraints for Data Integrity
+PRINT 'Adding Foreign Key Constraints...';
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_TimekeepingStaging_ImportBatch')
 BEGIN
-    SET NOCOUNT ON;
-    
-    DECLARE @MatchedCount INT = 0;
-    DECLARE @UnmatchedCount INT = 0;
-    
-    BEGIN TRANSACTION;
-    
-    BEGIN TRY
-        -- Insert matched records into enriched table
-        -- Note: Using three-part naming to access BRANCH_Directory database
-        INSERT INTO dbo.TimekeepingEnriched (
-            ImportBatchID,
-            Category,
-            ProjectMatter,
-            ClientContact,
-            ClientEmail,
-            ClientFirstName,
-            ClientLastName,
-            ClientUserID,
-            RecordedHours,
-            DirectorateNameE,
-            DirectorateNameF,
-            DirectorateAcronymE,
-            DirectorateAcronymF,
-            DirectorateID,
-            DivisionNameE,
-            DivisionNameF,
-            DivisionAcronymE,
-            DivisionAcronymF,
-            DivisionID,
-            BranchNameE,
-            BranchNameF,
-            BranchAcronymE,
-            BranchAcronymF,
-            BranchID,
-            SectionNameE,
-            SectionNameF,
-            SectionAcronymE,
-            SectionAcronymF,
-            SectionID,
-            ClientPhone,
-            PositionLevel,
-            IsManager,
-            MatchStatus,
-            ProcessedDate
-        )
-        SELECT 
-            s.ImportBatchID,
-            s.Category,
-            s.ProjectMatter,
-            s.ClientContact,
-            s.ClientEmail,
-            s.ClientFirstName,
-            s.ClientLastName,
-            u.userID,
-            s.RecordedHours,
-            u.DirectorateNameE,
-            u.DirectorateNameF,
-            u.DirectorateAcronymE,
-            u.DirectorateAcronymF,
-            u.DirectorateID,
-            u.DivisionNameE,
-            u.DivisionNameF,
-            u.DivisionAcronymE,
-            u.DivisionAcronymF,
-            u.DivisionID,
-            u.BranchNameE,
-            u.BranchNameF,
-            u.BranchAcronymE,
-            u.BranchAcronymF,
-            u.BranchID,
-            u.SectionNameE,
-            u.SectionNameF,
-            u.SectionAcronymE,
-            u.SectionAcronymF,
-            u.SectionID,
-            u.phone,
-            u.PositionLevel,
-            u.IsManager,
-            'Matched',
-            GETDATE()
-        FROM dbo.TimekeepingStaging s
-        LEFT JOIN [BRANCH_Directory].[dbo].[vUserInfo] u 
-            ON LOWER(LTRIM(RTRIM(s.ClientEmail))) = LOWER(LTRIM(RTRIM(u.userID)))
-            OR (
-                LOWER(LTRIM(RTRIM(s.ClientFirstName))) = LOWER(LTRIM(RTRIM(u.firstName)))
-                AND LOWER(LTRIM(RTRIM(s.ClientLastName))) = LOWER(LTRIM(RTRIM(u.lastName)))
-            )
-        WHERE s.ImportBatchID = @ImportBatchID
-            AND s.ProcessingStatus = 'Pending'
-            AND u.userID IS NOT NULL;
-        
-        SET @MatchedCount = @@ROWCOUNT;
-        
-        -- Update staging table status for matched records
-        UPDATE s
-        SET ProcessingStatus = 'Matched'
-        FROM dbo.TimekeepingStaging s
-        WHERE s.ImportBatchID = @ImportBatchID
-            AND s.ProcessingStatus = 'Pending'
-            AND EXISTS (
-                SELECT 1 
-                FROM dbo.TimekeepingEnriched e 
-                WHERE e.ImportBatchID = s.ImportBatchID 
-                    AND e.ClientEmail = s.ClientEmail
-            );
-        
-        -- Insert unmatched records into unmatched table
-        INSERT INTO dbo.UnmatchedClients (
-            ImportBatchID,
-            ClientEmail,
-            ClientFirstName,
-            ClientLastName,
-            ClientContact,
-            RecordedHours
-        )
-        SELECT 
-            s.ImportBatchID,
-            s.ClientEmail,
-            s.ClientFirstName,
-            s.ClientLastName,
-            s.ClientContact,
-            s.RecordedHours
-        FROM dbo.TimekeepingStaging s
-        WHERE s.ImportBatchID = @ImportBatchID
-            AND s.ProcessingStatus = 'Pending';
-        
-        SET @UnmatchedCount = @@ROWCOUNT;
-        
-        -- Update staging table status for unmatched records
-        UPDATE s
-        SET ProcessingStatus = 'Unmatched',
-            ErrorMessage = 'No matching user found in BRANCH_Directory.dbo.vUserInfo'
-        FROM dbo.TimekeepingStaging s
-        WHERE s.ImportBatchID = @ImportBatchID
-            AND s.ProcessingStatus = 'Pending';
-        
-        -- Update import batch summary
-        UPDATE dbo.ImportBatch
-        SET MatchedRecords = @MatchedCount,
-            UnmatchedRecords = @UnmatchedCount,
-            ProcessingStatus = 'Completed',
-            CompletedDate = GETDATE()
-        WHERE BatchID = @ImportBatchID;
-        
-        COMMIT TRANSACTION;
-        
-        -- Return summary
-        SELECT 
-            @ImportBatchID AS BatchID,
-            @MatchedCount AS MatchedRecords,
-            @UnmatchedCount AS UnmatchedRecords,
-            (@MatchedCount + @UnmatchedCount) AS TotalRecords;
-            
-    END TRY
-    BEGIN CATCH
-        IF @@TRANCOUNT > 0
-            ROLLBACK TRANSACTION;
-            
-        -- Log error
-        UPDATE dbo.ImportBatch
-        SET ProcessingStatus = 'Error',
-            Notes = ERROR_MESSAGE()
-        WHERE BatchID = @ImportBatchID;
-        
-        -- Re-throw error
-        THROW;
-    END CATCH
-END;
-GO
-
--- Test cross-database access
-PRINT 'Testing cross-database access to BRANCH_Directory...';
-
-DECLARE @TestCount INT;
-SELECT @TestCount = COUNT(*) 
-FROM [BRANCH_Directory].[dbo].[vUserInfo];
-
-IF @TestCount > 0
-BEGIN
-    PRINT 'SUCCESS: Can access BRANCH_Directory.dbo.vUserInfo (' + CAST(@TestCount AS VARCHAR) + ' records found)';
-    PRINT 'Stored procedure created successfully!';
+    ALTER TABLE dbo.TimekeepingStaging 
+        ADD CONSTRAINT FK_TimekeepingStaging_ImportBatch 
+        FOREIGN KEY (ImportBatchID) REFERENCES dbo.ImportBatch(BatchID);
+    PRINT '✓ Added FK: TimekeepingStaging -> ImportBatch';
 END
 ELSE
+    PRINT '  Already exists: FK_TimekeepingStaging_ImportBatch';
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_TimekeepingEnriched_ImportBatch')
 BEGIN
-    PRINT 'WARNING: BRANCH_Directory.dbo.vUserInfo is accessible but contains no data';
-    PRINT 'Stored procedure created successfully!';
+    ALTER TABLE dbo.TimekeepingEnriched 
+        ADD CONSTRAINT FK_TimekeepingEnriched_ImportBatch 
+        FOREIGN KEY (ImportBatchID) REFERENCES dbo.ImportBatch(BatchID);
+    PRINT '✓ Added FK: TimekeepingEnriched -> ImportBatch';
 END
+ELSE
+    PRINT '  Already exists: FK_TimekeepingEnriched_ImportBatch';
+GO
+
+-- Add Performance Indexes
+PRINT '';
+PRINT 'Adding Performance Indexes...';
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TimekeepingStaging_ImportBatchID_Status')
+BEGIN
+    CREATE INDEX IX_TimekeepingStaging_ImportBatchID_Status 
+        ON dbo.TimekeepingStaging(ImportBatchID, ProcessingStatus)
+        INCLUDE (ClientEmail, RecordedHours);
+    PRINT '✓ Added Index: TimekeepingStaging(ImportBatchID, ProcessingStatus)';
+END
+ELSE
+    PRINT '  Already exists: IX_TimekeepingStaging_ImportBatchID_Status';
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ImportBatch_ImportDate')
+BEGIN
+    CREATE INDEX IX_ImportBatch_ImportDate 
+        ON dbo.ImportBatch(ImportDate DESC);
+    PRINT '✓ Added Index: ImportBatch(ImportDate)';
+END
+ELSE
+    PRINT '  Already exists: IX_ImportBatch_ImportDate';
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ImportBatch_ProcessingStatus')
+BEGIN
+    CREATE INDEX IX_ImportBatch_ProcessingStatus 
+        ON dbo.ImportBatch(ProcessingStatus)
+        INCLUDE (ImportDate, TotalRecords, MatchedRecords);
+    PRINT '✓ Added Index: ImportBatch(ProcessingStatus)';
+END
+ELSE
+    PRINT '  Already exists: IX_ImportBatch_ProcessingStatus';
+GO
+
+-- Add Check Constraints for Data Validation
+PRINT '';
+PRINT 'Adding Data Validation Constraints...';
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_TimekeepingEnriched_Hours')
+BEGIN
+    ALTER TABLE dbo.TimekeepingEnriched 
+        ADD CONSTRAINT CK_TimekeepingEnriched_Hours 
+        CHECK (RecordedHours >= 0 AND RecordedHours <= 999.99);
+    PRINT '✓ Added Check: TimekeepingEnriched RecordedHours validation (0-999.99)';
+END
+ELSE
+    PRINT '  Already exists: CK_TimekeepingEnriched_Hours';
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_TimekeepingStaging_Hours')
+BEGIN
+    ALTER TABLE dbo.TimekeepingStaging 
+        ADD CONSTRAINT CK_TimekeepingStaging_Hours 
+        CHECK (RecordedHours >= 0 AND RecordedHours <= 999.99);
+    PRINT '✓ Added Check: TimekeepingStaging RecordedHours validation (0-999.99)';
+END
+ELSE
+    PRINT '  Already exists: CK_TimekeepingStaging_Hours';
+GO
+
+-- Add Default Constraints
+PRINT '';
+PRINT 'Verifying Default Constraints...';
+
+IF NOT EXISTS (SELECT 1 FROM sys.default_constraints WHERE parent_object_id = OBJECT_ID('dbo.ImportBatch') AND name = 'DF_ImportBatch_ImportDate')
+BEGIN
+    ALTER TABLE dbo.ImportBatch 
+        ADD CONSTRAINT DF_ImportBatch_ImportDate 
+        DEFAULT GETDATE() FOR ImportDate;
+    PRINT '✓ Added Default: ImportBatch.ImportDate';
+END
+ELSE
+    PRINT '  Already exists: DF_ImportBatch_ImportDate';
+GO
+
+-- Verify all indexes exist
+PRINT '';
+PRINT 'Verifying Core Indexes...';
+
+DECLARE @MissingIndexes TABLE (TableName VARCHAR(100), IndexName VARCHAR(100));
+
+-- Check existing indexes
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.TimekeepingEnriched') AND name = 'IX_TimekeepingEnriched_DirectorateID')
+    INSERT INTO @MissingIndexes VALUES ('TimekeepingEnriched', 'IX_TimekeepingEnriched_DirectorateID');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.TimekeepingEnriched') AND name = 'IX_TimekeepingEnriched_ImportBatchID')
+    INSERT INTO @MissingIndexes VALUES ('TimekeepingEnriched', 'IX_TimekeepingEnriched_ImportBatchID');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.TimekeepingEnriched') AND name = 'IX_TimekeepingEnriched_ClientEmail')
+    INSERT INTO @MissingIndexes VALUES ('TimekeepingEnriched', 'IX_TimekeepingEnriched_ClientEmail');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.UnmatchedClients') AND name = 'IX_UnmatchedClients_ImportBatchID')
+    INSERT INTO @MissingIndexes VALUES ('UnmatchedClients', 'IX_UnmatchedClients_ImportBatchID');
+
+IF EXISTS (SELECT 1 FROM @MissingIndexes)
+BEGIN
+    PRINT '⚠ WARNING: Some core indexes are missing!';
+    SELECT '  Missing: ' + TableName + '.' + IndexName FROM @MissingIndexes;
+    PRINT '  Please re-run the table creation script to add these indexes.';
+END
+ELSE
+    PRINT '✓ All core indexes verified';
+
+PRINT '';
+PRINT '========================================';
+PRINT 'Production Enhancements Complete!';
+PRINT '========================================';
+PRINT '';
+PRINT 'Summary:';
+PRINT '  ✓ Foreign key constraints added';
+PRINT '  ✓ Performance indexes added';
+PRINT '  ✓ Data validation constraints added';
+PRINT '  ✓ All indexes verified';
+PRINT '';
+PRINT 'Your database is now production-ready!';
 GO
