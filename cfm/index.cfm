@@ -7,8 +7,87 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="../css/styles.css" rel="stylesheet">
+    <style>
+        /* Loading overlay styles */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .loading-overlay.show {
+            display: flex;
+        }
+        
+        .loading-content {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            text-align: center;
+            min-width: 400px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+        
+        .loading-spinner {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #0d6efd;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .progress-bar-animated {
+            animation: progress-bar-stripes 1s linear infinite;
+        }
+        
+        @keyframes progress-bar-stripes {
+            0% { background-position: 1rem 0; }
+            100% { background-position: 0 0; }
+        }
+        
+        .loading-stage {
+            font-size: 16px;
+            color: #666;
+            margin-top: 15px;
+        }
+    </style>
 </head>
 <body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <h4 class="mb-3">Processing Your File...</h4>
+            <div class="progress mb-3" style="height: 30px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                     role="progressbar" 
+                     style="width: 100%"
+                     id="progressBar">
+                </div>
+            </div>
+            <div class="loading-stage" id="loadingStage">
+                <i class="fas fa-upload"></i> Uploading file...
+            </div>
+            <p class="text-muted mt-3 mb-0">
+                <small>This may take a few moments depending on file size.</small>
+            </p>
+        </div>
+    </div>
+
     <nav class="navbar navbar-dark bg-primary">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h1">
@@ -127,13 +206,6 @@
                                 <i class="fas fa-upload"></i> Upload and Process
                             </button>
                         </form>
-
-                        <div id="processingIndicator" class="text-center mt-4" style="display: none;">
-                            <div class="spinner-border text-primary" role="status">
-                                <span class="visually-hidden">Processing...</span>
-                            </div>
-                            <p class="mt-2">Processing your file... Please wait.</p>
-                        </div>
                     </div>
                 </div>
 
@@ -188,7 +260,7 @@
                                     <tbody>
                                         <cfoutput query="recentImports">
                                             <tr>
-                                                <td>##BatchID##</td>
+                                                <td>###BatchID#</td>
                                                 <td>#FileName#</td>
                                                 <td>#dateFormat(ImportDate, "yyyy-mm-dd")# #timeFormat(ImportDate, "HH:mm")#</td>
                                                 <td>#TotalRecords#</td>
@@ -273,7 +345,42 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="../js/upload.js"></script>
+    <script>
+        // Loading overlay with animated stages
+        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            const fileInput = document.getElementById('uploadFile');
+            
+            if (!fileInput.files || fileInput.files.length === 0) {
+                return;
+            }
+            
+            // Show loading overlay
+            const overlay = document.getElementById('loadingOverlay');
+            const stageText = document.getElementById('loadingStage');
+            overlay.classList.add('show');
+            
+            // Animate through stages
+            const stages = [
+                { icon: 'fa-upload', text: 'Uploading file...' },
+                { icon: 'fa-file-excel', text: 'Reading Excel data...' },
+                { icon: 'fa-search', text: 'Extracting contact information...' },
+                { icon: 'fa-database', text: 'Matching with directory...' },
+                { icon: 'fa-check', text: 'Finalizing import...' }
+            ];
+            
+            let currentStage = 0;
+            const stageInterval = setInterval(function() {
+                currentStage++;
+                if (currentStage < stages.length) {
+                    const stage = stages[currentStage];
+                    stageText.innerHTML = '<i class="fas ' + stage.icon + '"></i> ' + stage.text;
+                }
+            }, 2000); // Change stage every 2 seconds
+            
+            // Store interval ID to clear it if needed
+            window.loadingInterval = stageInterval;
+        });
+    </script>
 </body>
 </html>
 
@@ -282,16 +389,9 @@
     <cfset result.success = false>
     
     <cftry>
-        <!--- Upload file --->
-        <cffile action="upload"
-                fileField="uploadFile"
-                destination="#expandPath('./uploads/')#"
-                nameConflict="makeUnique"
-                result="uploadInfo">
-        
+        <cffile action="upload" fileField="uploadFile" destination="#expandPath('./uploads/')#" nameConflict="makeUnique" result="uploadInfo">
         <cfset var filePath = uploadInfo.serverDirectory & "/" & uploadInfo.serverFile>
         
-        <!--- Create import batch record --->
         <cfquery name="createBatch" datasource="PMSD_SATS">
             INSERT INTO dbo.ImportBatch (FileName, ImportedBy, Notes, TotalRecords)
             VALUES (
@@ -303,14 +403,12 @@
             SELECT SCOPE_IDENTITY() AS BatchID;
         </cfquery>
         
-        <!--- Get BatchID --->
         <cfif createBatch.recordCount GT 0>
             <cfset var batchID = createBatch.BatchID[1]>
         <cfelse>
             <cfthrow message="Failed to retrieve BatchID after insert.">
         </cfif>
         
-        <!--- Read Excel file - Triple fallback --->
         <cfset var excelData = "">
         <cfset var sheetName = "Data">
         
@@ -330,7 +428,6 @@
             <cfthrow message="No data found in Excel file.">
         </cfif>
         
-        <!--- Find Contact Name column --->
         <cfset var contactNameCol = "">
         <cfset var columns = listToArray(excelData.columnList)>
         
@@ -345,7 +442,6 @@
             <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
         </cfif>
         
-        <!--- Find Hours column --->
         <cfset var hoursCol = "">
         <cfloop array="#columns#" index="colName">
             <cfif findNoCase("hour", colName) GT 0 OR findNoCase("recorded", colName) GT 0>
@@ -358,7 +454,6 @@
             <cfset hoursCol = listLast(excelData.columnList)>
         </cfif>
         
-        <!--- Process each row --->
         <cfset var recordCount = 0>
         <cfset var skippedCount = 0>
         
@@ -387,7 +482,6 @@
                 </cfcatch>
             </cftry>
             
-            <!--- Extract email and name --->
             <cfif clientContact NEQ "">
                 <cfset var emailMatch = reMatchNoCase("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clientContact)>
                 <cfif arrayLen(emailMatch) GT 0>
@@ -434,7 +528,6 @@
             UPDATE dbo.ImportBatch SET TotalRecords = <cfqueryparam value="#recordCount#" cfsqltype="cf_sql_integer"> WHERE BatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
         </cfquery>
         
-        <!--- Inline enrichment --->
         <cfquery datasource="PMSD_SATS">
             INSERT INTO dbo.TimekeepingEnriched (ImportBatchID, Category, ProjectMatter, ClientContact, ClientEmail, ClientFirstName, ClientLastName, ClientUserID, RecordedHours, DirectorateNameE, DirectorateNameF, DirectorateAcronymE, DirectorateAcronymF, DirectorateID, DivisionNameE, DivisionNameF, DivisionAcronymE, DivisionAcronymF, DivisionID, BranchNameE, BranchNameF, BranchAcronymE, BranchAcronymF, BranchID, SectionNameE, SectionNameF, SectionAcronymE, SectionAcronymF, SectionID, ClientPhone, PositionLevel, IsManager, MatchStatus, ProcessedDate)
             SELECT s.ImportBatchID, s.Category, s.ProjectMatter, s.ClientContact, s.ClientEmail, s.ClientFirstName, s.ClientLastName, u.userID, s.RecordedHours, u.DirectorateNameE, u.DirectorateNameF, u.DirectorateAcronymE, u.DirectorateAcronymF, u.DirectorateID, u.DivisionNameE, u.DivisionNameF, u.DivisionAcronymE, u.DivisionAcronymF, u.DivisionID, u.BranchNameE, u.BranchNameF, u.BranchAcronymE, u.BranchAcronymF, u.BranchID, u.SectionNameE, u.SectionNameF, u.SectionAcronymE, u.SectionAcronymF, u.SectionID, u.phone, u.PositionLevel, u.IsManager, 'Matched', GETDATE()
