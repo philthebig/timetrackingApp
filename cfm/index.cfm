@@ -1,72 +1,19 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Timekeeping Import Tool</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="../css/styles.css" rel="stylesheet">
-    <style>
-        /* Loading overlay styles */
-        .loading-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.7);
-            z-index: 9999;
-            justify-content: center;
-            align-items: center;
-        }
-        
-        .loading-overlay.show {
-            display: flex;
-        }
-        
-        .loading-content {
-            background: white;
-            padding: 40px;
-            border-radius: 10px;
-            text-align: center;
-            min-width: 400px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-        }
-        
-        .loading-spinner {
-            width: 80px;
-            height: 80px;
-            margin: 0 auto 20px;
-            border: 8px solid #f3f3f3;
-            border-top: 8px solid #0d6efd;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        .progress-bar-animated {
-            animation: progress-bar-stripes 1s linear infinite;
-        }
-        
-        @keyframes progress-bar-stripes {
-            0% { background-position: 1rem 0; }
-            100% { background-position: 0 0; }
-        }
-        
-        .loading-stage {
-            font-size: 16px;
-            color: #666;
-            margin-top: 15px;
-        }
-    </style>
-</head>
-<body>
+<cfif structKeyExists(url, "page") AND url.page EQ 'AccessDenied'>
+    <cfinclude template="AccessDenied.cfm">
+<cfelse>
+    <cfinclude template="navbar.cfm">
+    <cfparam name="url.page" default="1">
+    <cfset currentPage = val(url.page)>
+    <cfset pageSize = 10>
+    <cfset startRow = (currentPage - 1) * pageSize + 1>
+    <cfset args = {
+        startRow = startRow,
+        pageSize = pageSize
+    }>
+
+    <cfinvoke component="#application.query#" method="importCount" returnvariable="recentImportsCount">
+    <cfinvoke component="#application.query#" method="recentImport" returnvariable="recentImports" argumentcollection="#args#">
+
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-content">
@@ -74,9 +21,9 @@
             <h4 class="mb-3">Processing Your File...</h4>
             <div class="progress mb-3" style="height: 30px;">
                 <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
-                     role="progressbar" 
-                     style="width: 100%"
-                     id="progressBar">
+                    role="progressbar" 
+                    style="width: 100%"
+                    id="progressBar">
                 </div>
             </div>
             <div class="loading-stage" id="loadingStage">
@@ -88,32 +35,17 @@
         </div>
     </div>
 
-    <nav class="navbar navbar-dark bg-primary">
-        <div class="container-fluid">
-            <span class="navbar-brand mb-0 h1">
-                <i class="fas fa-clock"></i> Timekeeping Import & Analytics
-            </span>
-            <div class="d-flex">
-                <a href="index.cfm" class="btn btn-outline-light me-2">
-                    <i class="fas fa-upload"></i> Import
-                </a>
-                <a href="dashboard.cfm" class="btn btn-outline-light me-2">
-                    <i class="fas fa-chart-line"></i> Dashboard
-                </a>
-                <a href="export.cfm" class="btn btn-outline-light">
-                    <i class="fas fa-download"></i> Export
-                </a>
-            </div>
-        </div>
-    </nav>
-
-    <div class="container mt-5">
+    <div class="container-fluid mt-perso">
         <div class="row">
             <div class="col-md-8 offset-md-2">
                 
                 <cfif structKeyExists(form, "uploadFile")>
                     <cftry>
-                        <cfset uploadResult = processUpload()>
+                        <cfinvoke
+                            component="#application.query#"
+                            method="processUpload"
+                            returnvariable="uploadResult">
+                        </cfinvoke>
                         
                         <cfif uploadResult.success>
                             <div class="alert alert-success" role="alert">
@@ -170,11 +102,11 @@
                                     Select Excel File (.xlsx)
                                 </label>
                                 <input type="file" 
-                                       class="form-control" 
-                                       id="uploadFile" 
-                                       name="uploadFile" 
-                                       accept=".xlsx,.xls" 
-                                       required>
+                                    class="form-control" 
+                                    id="uploadFile" 
+                                    name="uploadFile" 
+                                    accept=".xlsx,.xls" 
+                                    required>
                                 <div class="form-text">
                                     Upload your timekeeping report Excel file.
                                 </div>
@@ -185,10 +117,10 @@
                                     Imported By
                                 </label>
                                 <input type="text" 
-                                       class="form-control" 
-                                       id="importedBy" 
-                                       name="importedBy" 
-                                       placeholder="Your name">
+                                    class="form-control" 
+                                    id="importedBy" 
+                                    name="importedBy" 
+                                    placeholder="Your name">
                             </div>
 
                             <div class="mb-3">
@@ -196,10 +128,10 @@
                                     Notes (Optional)
                                 </label>
                                 <textarea class="form-control" 
-                                          id="notes" 
-                                          name="notes" 
-                                          rows="3" 
-                                          placeholder="Any notes about this import..."></textarea>
+                                        id="notes" 
+                                        name="notes" 
+                                        rows="3" 
+                                        placeholder="Any notes about this import..."></textarea>
                             </div>
 
                             <button type="submit" class="btn btn-primary btn-lg w-100" id="submitBtn">
@@ -214,34 +146,8 @@
                     <div class="card-header bg-secondary text-white">
                         <h5><i class="fas fa-history"></i> Recent Imports</h5>
                     </div>
-                    <div class="card-body">
-                        <cfparam name="url.page" default="1">
-                        <cfset currentPage = val(url.page)>
-                        <cfset pageSize = 10>
-                        <cfset startRow = (currentPage - 1) * pageSize + 1>
-                        
-                        <cfquery name="recentImportsCount" datasource="PMSD_SATS">
-                            SELECT COUNT(*) AS TotalCount
-                            FROM dbo.ImportBatch
-                        </cfquery>
-                        
+                    <div class="card-body">                            
                         <cfset totalPages = ceiling(recentImportsCount.TotalCount / pageSize)>
-                        
-                        <cfquery name="recentImports" datasource="PMSD_SATS">
-                            SELECT 
-                                BatchID,
-                                FileName,
-                                ImportDate,
-                                TotalRecords,
-                                MatchedRecords,
-                                UnmatchedRecords,
-                                ProcessingStatus,
-                                ImportedBy
-                            FROM dbo.ImportBatch
-                            ORDER BY ImportDate DESC
-                            OFFSET <cfqueryparam value="#startRow - 1#" cfsqltype="cf_sql_integer"> ROWS
-                            FETCH NEXT <cfqueryparam value="#pageSize#" cfsqltype="cf_sql_integer"> ROWS ONLY
-                        </cfquery>
 
                         <cfif recentImports.recordCount GT 0>
                             <div class="table-responsive">
@@ -265,8 +171,11 @@
                                                 <td>#dateFormat(ImportDate, "yyyy-mm-dd")# #timeFormat(ImportDate, "HH:mm")#</td>
                                                 <td>#TotalRecords#</td>
                                                 <td>
-                                                    <cfif TotalRecords GT 0>
-                                                        <cfset matchRate = (MatchedRecords / TotalRecords) * 100>
+                                                    <cfif val(TotalRecords) GT 0>
+                                                        <cfset matchRate = (
+                                                            val(MatchedRecords) / val(TotalRecords)
+                                                        ) * 100>
+
                                                         <span class="badge bg-<cfif matchRate GTE 90>success<cfelseif matchRate GTE 70>warning<cfelse>danger</cfif>">
                                                             #numberFormat(matchRate, "99.9")#%
                                                         </span>
@@ -344,242 +253,8 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Loading overlay with animated stages
-        document.getElementById('uploadForm').addEventListener('submit', function(e) {
-            const fileInput = document.getElementById('uploadFile');
-            
-            if (!fileInput.files || fileInput.files.length === 0) {
-                return;
-            }
-            
-            // Show loading overlay
-            const overlay = document.getElementById('loadingOverlay');
-            const stageText = document.getElementById('loadingStage');
-            overlay.classList.add('show');
-            
-            // Animate through stages
-            const stages = [
-                { icon: 'fa-upload', text: 'Uploading file...' },
-                { icon: 'fa-file-excel', text: 'Reading Excel data...' },
-                { icon: 'fa-search', text: 'Extracting contact information...' },
-                { icon: 'fa-database', text: 'Matching with directory...' },
-                { icon: 'fa-check', text: 'Finalizing import...' }
-            ];
-            
-            let currentStage = 0;
-            const stageInterval = setInterval(function() {
-                currentStage++;
-                if (currentStage < stages.length) {
-                    const stage = stages[currentStage];
-                    stageText.innerHTML = '<i class="fas ' + stage.icon + '"></i> ' + stage.text;
-                }
-            }, 2000); // Change stage every 2 seconds
-            
-            // Store interval ID to clear it if needed
-            window.loadingInterval = stageInterval;
-        });
-    </script>
+    <script src="/PMSD/SATS/Timetracking/resources/js/loading.js"></script>
+    <script src="/PMSD/SATS/Timetracking/resources/bootstrap/bootstrap/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
-
-<cffunction name="processUpload" returntype="struct">
-    <cfset var result = structNew()>
-    <cfset result.success = false>
-    
-    <cftry>
-        <cffile action="upload" fileField="uploadFile" destination="#expandPath('./uploads/')#" nameConflict="makeUnique" result="uploadInfo">
-        <cfset var filePath = uploadInfo.serverDirectory & "/" & uploadInfo.serverFile>
-        
-        <cfquery name="createBatch" datasource="PMSD_SATS">
-            INSERT INTO dbo.ImportBatch (FileName, ImportedBy, Notes, TotalRecords)
-            VALUES (
-                <cfqueryparam value="#uploadInfo.clientFile#" cfsqltype="cf_sql_varchar">,
-                <cfqueryparam value="#form.importedBy#" cfsqltype="cf_sql_varchar" null="#trim(form.importedBy) EQ ''#">,
-                <cfqueryparam value="#form.notes#" cfsqltype="cf_sql_varchar" null="#trim(form.notes) EQ ''#">,
-                0
-            );
-            SELECT SCOPE_IDENTITY() AS BatchID;
-        </cfquery>
-        
-        <cfif createBatch.recordCount GT 0>
-            <cfset var batchID = createBatch.BatchID[1]>
-        <cfelse>
-            <cfthrow message="Failed to retrieve BatchID after insert.">
-        </cfif>
-        
-        <cfset var excelData = "">
-        <cfset var sheetName = "Data">
-        
-        <cftry>
-            <cfspreadsheet action="read" src="#filePath#" query="excelData" sheetname="#sheetName#" headerrow="1" excludeHeaderRow="true">
-            <cfcatch type="any">
-                <cftry>
-                    <cfspreadsheet action="read" src="#filePath#" query="excelData" sheet="1" headerrow="1" excludeHeaderRow="true">
-                    <cfcatch type="any">
-                        <cfspreadsheet action="read" src="#filePath#" query="excelData" headerrow="1" excludeHeaderRow="true">
-                    </cfcatch>
-                </cftry>
-            </cfcatch>
-        </cftry>
-        
-        <cfif NOT isQuery(excelData) OR excelData.recordCount EQ 0>
-            <cfthrow message="No data found in Excel file.">
-        </cfif>
-        
-        <cfset var contactNameCol = "">
-        <cfset var columns = listToArray(excelData.columnList)>
-        
-        <cfloop array="#columns#" index="colName">
-            <cfif compareNoCase(colName, "Contact_Name") EQ 0 OR compareNoCase(colName, "ContactName") EQ 0 OR findNoCase("contact", colName) GT 0>
-                <cfset contactNameCol = colName>
-                <cfbreak>
-            </cfif>
-        </cfloop>
-        
-        <cfif contactNameCol EQ "" AND listLen(excelData.columnList) GTE 5>
-            <cfset contactNameCol = listGetAt(excelData.columnList, 5)>
-        </cfif>
-        
-        <cfset var hoursCol = "">
-        <cfloop array="#columns#" index="colName">
-            <cfif findNoCase("hour", colName) GT 0 OR findNoCase("recorded", colName) GT 0>
-                <cfset hoursCol = colName>
-                <cfbreak>
-            </cfif>
-        </cfloop>
-        
-        <cfif hoursCol EQ "">
-            <cfset hoursCol = listLast(excelData.columnList)>
-        </cfif>
-        
-        <cfset var recordCount = 0>
-        <cfset var skippedCount = 0>
-        
-        <cfloop query="excelData">
-            <cfset var clientContact = "">
-            <cfset var clientEmail = "">
-            <cfset var firstName = "">
-            <cfset var lastName = "">
-            <cfset var hours = 0>
-            
-            <cftry>
-                <cfif contactNameCol NEQ "" AND isDefined("excelData.#contactNameCol#")>
-                    <cfset clientContact = trim(excelData[contactNameCol][currentRow])>
-                </cfif>
-                
-                <cfif hoursCol NEQ "" AND isDefined("excelData.#hoursCol#")>
-                    <cfset var hoursValue = excelData[hoursCol][currentRow]>
-                    <cfif isNumeric(hoursValue)>
-                        <cfset hours = hoursValue>
-                    </cfif>
-                </cfif>
-                
-                <cfcatch>
-                    <cfset skippedCount = skippedCount + 1>
-                    <cfcontinue>
-                </cfcatch>
-            </cftry>
-            
-            <cfif clientContact NEQ "">
-                <cfset var emailMatch = reMatchNoCase("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clientContact)>
-                <cfif arrayLen(emailMatch) GT 0>
-                    <cfset clientEmail = lCase(trim(emailMatch[1]))>
-                    
-                    <cfset var nameStr = clientContact>
-                    <cfif find("[", nameStr) GT 0>
-                        <cfset nameStr = left(nameStr, find("[", nameStr) - 1)>
-                    </cfif>
-                    <cfset nameStr = trim(nameStr)>
-                    
-                    <cfif find(",", nameStr) GT 0>
-                        <cfset var nameParts = listToArray(nameStr, ",")>
-                        <cfif arrayLen(nameParts) GTE 2>
-                            <cfset lastName = trim(nameParts[1])>
-                            <cfset firstName = trim(nameParts[2])>
-                        </cfif>
-                    </cfif>
-                </cfif>
-            </cfif>
-            
-            <cfif clientEmail NEQ "">
-                <cfquery datasource="PMSD_SATS">
-                    INSERT INTO dbo.TimekeepingStaging (ImportBatchID, RowNumber, Category, ProjectMatter, ClientContact, ClientEmail, ClientFirstName, ClientLastName, RecordedHours)
-                    VALUES (
-                        <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">,
-                        <cfqueryparam value="#currentRow#" cfsqltype="cf_sql_integer">,
-                        <cfqueryparam value="" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="#clientContact#" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="#clientEmail#" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="#firstName#" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="#lastName#" cfsqltype="cf_sql_varchar">,
-                        <cfqueryparam value="#hours#" cfsqltype="cf_sql_decimal">
-                    )
-                </cfquery>
-                <cfset recordCount = recordCount + 1>
-            <cfelse>
-                <cfset skippedCount = skippedCount + 1>
-            </cfif>
-        </cfloop>
-        
-        <cfquery datasource="PMSD_SATS">
-            UPDATE dbo.ImportBatch SET TotalRecords = <cfqueryparam value="#recordCount#" cfsqltype="cf_sql_integer"> WHERE BatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
-        </cfquery>
-        
-        <cfquery datasource="PMSD_SATS">
-            INSERT INTO dbo.TimekeepingEnriched (ImportBatchID, Category, ProjectMatter, ClientContact, ClientEmail, ClientFirstName, ClientLastName, ClientUserID, RecordedHours, DirectorateNameE, DirectorateNameF, DirectorateAcronymE, DirectorateAcronymF, DirectorateID, DivisionNameE, DivisionNameF, DivisionAcronymE, DivisionAcronymF, DivisionID, BranchNameE, BranchNameF, BranchAcronymE, BranchAcronymF, BranchID, SectionNameE, SectionNameF, SectionAcronymE, SectionAcronymF, SectionID, ClientPhone, PositionLevel, IsManager, MatchStatus, ProcessedDate)
-            SELECT s.ImportBatchID, s.Category, s.ProjectMatter, s.ClientContact, s.ClientEmail, s.ClientFirstName, s.ClientLastName, u.userID, s.RecordedHours, u.DirectorateNameE, u.DirectorateNameF, u.DirectorateAcronymE, u.DirectorateAcronymF, u.DirectorateID, u.DivisionNameE, u.DivisionNameF, u.DivisionAcronymE, u.DivisionAcronymF, u.DivisionID, u.BranchNameE, u.BranchNameF, u.BranchAcronymE, u.BranchAcronymF, u.BranchID, u.SectionNameE, u.SectionNameF, u.SectionAcronymE, u.SectionAcronymF, u.SectionID, u.phone, u.PositionLevel, u.IsManager, 'Matched', GETDATE()
-            FROM dbo.TimekeepingStaging s
-            LEFT JOIN [BRANCH_Directory].[dbo].[vUserInfo] u ON LOWER(LTRIM(RTRIM(s.ClientEmail))) = LOWER(LTRIM(RTRIM(u.userID))) OR (LOWER(LTRIM(RTRIM(s.ClientFirstName))) = LOWER(LTRIM(RTRIM(u.firstName))) AND LOWER(LTRIM(RTRIM(s.ClientLastName))) = LOWER(LTRIM(RTRIM(u.lastName))))
-            WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer"> AND s.ProcessingStatus = 'Pending' AND u.userID IS NOT NULL
-        </cfquery>
-        
-        <cfquery name="matchedCount" datasource="PMSD_SATS">
-            SELECT COUNT(*) AS MatchCount FROM dbo.TimekeepingEnriched WHERE ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
-        </cfquery>
-        
-        <cfquery datasource="PMSD_SATS">
-            UPDATE s SET ProcessingStatus = 'Matched' FROM dbo.TimekeepingStaging s WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer"> AND s.ProcessingStatus = 'Pending' AND EXISTS (SELECT 1 FROM dbo.TimekeepingEnriched e WHERE e.ImportBatchID = s.ImportBatchID AND e.ClientEmail = s.ClientEmail)
-        </cfquery>
-        
-        <cfquery datasource="PMSD_SATS">
-            INSERT INTO dbo.UnmatchedClients (ImportBatchID, ClientEmail, ClientFirstName, ClientLastName, ClientContact, RecordedHours)
-            SELECT s.ImportBatchID, s.ClientEmail, s.ClientFirstName, s.ClientLastName, s.ClientContact, s.RecordedHours FROM dbo.TimekeepingStaging s WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer"> AND s.ProcessingStatus = 'Pending'
-        </cfquery>
-        
-        <cfquery name="unmatchedCount" datasource="PMSD_SATS">
-            SELECT COUNT(*) AS UnmatchCount FROM dbo.UnmatchedClients WHERE ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
-        </cfquery>
-        
-        <cfquery datasource="PMSD_SATS">
-            UPDATE s SET ProcessingStatus = 'Unmatched', ErrorMessage = 'No matching user found in directory' FROM dbo.TimekeepingStaging s WHERE s.ImportBatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer"> AND s.ProcessingStatus = 'Pending'
-        </cfquery>
-        
-        <cfquery datasource="PMSD_SATS">
-            UPDATE dbo.ImportBatch SET MatchedRecords = <cfqueryparam value="#matchedCount.MatchCount#" cfsqltype="cf_sql_integer">, UnmatchedRecords = <cfqueryparam value="#unmatchedCount.UnmatchCount#" cfsqltype="cf_sql_integer">, ProcessingStatus = 'Completed', CompletedDate = GETDATE() WHERE BatchID = <cfqueryparam value="#batchID#" cfsqltype="cf_sql_integer">
-        </cfquery>
-        
-        <cffile action="delete" file="#filePath#">
-        
-        <cfset result.success = true>
-        <cfset result.batchID = batchID>
-        <cfset result.fileName = uploadInfo.clientFile>
-        <cfset result.totalRecords = recordCount>
-        <cfset result.matchedRecords = matchedCount.MatchCount>
-        <cfset result.unmatchedRecords = unmatchedCount.UnmatchCount>
-        <cfif recordCount GT 0>
-            <cfset result.matchRate = (matchedCount.MatchCount / recordCount) * 100>
-        <cfelse>
-            <cfset result.matchRate = 0>
-        </cfif>
-        
-        <cfcatch type="any">
-            <cfset result.success = false>
-            <cfset result.errorMessage = cfcatch.message & " - " & cfcatch.detail>
-        </cfcatch>
-    </cftry>
-    
-    <cfreturn result>
-</cffunction>
+</cfif>

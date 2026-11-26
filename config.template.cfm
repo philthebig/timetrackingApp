@@ -1,7 +1,4 @@
-/* ================================================
-   CONFIGURATION TEMPLATE
-   Copy this to config.cfm and update with your settings
-   ================================================ */
+
 
 <!--- Database Configuration --->
 <cfset config.datasourceName = "yourDatasource">

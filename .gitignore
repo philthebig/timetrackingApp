@@ -72,3 +72,14 @@ coverage/
 # Sensitive data
 secrets.cfm
 credentials.cfm
+
+# Local extract / uploaded archive (source is unpacked into repo)
+_zip_extract/
+Timetracking.zip
+
+# Office lock / temp files
+~$*
+
+# Sample/export Excel data under cleanExport (may contain client data)
+cfm/cleanExport/*.xlsx
+cfm/cleanExport/*.xls

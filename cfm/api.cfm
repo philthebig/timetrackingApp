@@ -1,7 +1,3 @@
-<!--- 
-    API Endpoint for AJAX Operations
-    Handles various AJAX requests from the frontend
---->
 
 <cfparam name="url.action" default="">
 <cfparam name="url.batchId" default="0">

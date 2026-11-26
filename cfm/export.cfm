@@ -1,38 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Export Data - Timekeeping Analytics</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="../css/styles.css" rel="stylesheet">
-</head>
-<body>
-    <nav class="navbar navbar-dark bg-primary">
-        <div class="container-fluid">
-            <span class="navbar-brand mb-0 h1">
-                <i class="fas fa-download"></i> Export Data
-            </span>
-            <div class="d-flex">
-                <a href="index.cfm" class="btn btn-outline-light me-2">
-                    <i class="fas fa-upload"></i> Import
-                </a>
-                <a href="dashboard.cfm" class="btn btn-outline-light me-2">
-                    <i class="fas fa-chart-line"></i> Dashboard
-                </a>
-                <a href="export.cfm" class="btn btn-outline-light">
-                    <i class="fas fa-download"></i> Export
-                </a>
-            </div>
-        </div>
-    </nav>
-
-    <div class="container mt-5">
+<cfinclude template="navbar.cfm">
+    <div class="container-fluid mt-perso">
         <cfparam name="url.type" default="all">
         <cfparam name="url.batch" default="0">
         <cfset exportType = url.type>
         <cfset batchFilter = val(url.batch)>
+        <cfset args = {
+            batchFilter = batchFilter
+        }>
+
+        <cfinvoke component="#application.query#" method="quickStatistics" returnvariable="quickStats" argumentcollection="#args#">
         
         <!--- Process Export if requested --->
         <cfif structKeyExists(url, "download") AND url.download EQ "true">
@@ -51,63 +27,16 @@
                 <!--- Query based on export type --->
                 <cfswitch expression="#exportType#">
                     <cfcase value="unmatched">
-                        <cfquery name="exportData" datasource="PMSD_SATS">
-                            SELECT 
-                                ClientEmail,
-                                ClientFirstName,
-                                ClientLastName,
-                                ClientContact,
-                                RecordedHours
-                            FROM dbo.UnmatchedClients
-                            <cfif batchFilter GT 0>
-                                WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer">
-                            </cfif>
-                            ORDER BY ClientLastName, ClientFirstName
-                        </cfquery>
+                        <cfinvoke component="#application.query#" method="unmatchedExport" returnvariable="exportData" argumentcollection="#args#">
                     </cfcase>
                     
                     <cfcase value="directorate">
-                        <cfquery name="exportData" datasource="PMSD_SATS">
-                            SELECT 
-                                DirectorateNameE AS Directorate,
-                                DirectorateAcronymE AS Acronym,
-                                ClientFirstName AS FirstName,
-                                ClientLastName AS LastName,
-                                ClientEmail AS Email,
-                                RecordedHours AS Hours
-                            FROM dbo.TimekeepingEnriched
-                            <cfif batchFilter GT 0>
-                                WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer">
-                            </cfif>
-                            ORDER BY DirectorateNameE, ClientLastName, ClientFirstName
-                        </cfquery>
+                        <cfinvoke component="#application.query#" method="directorateExport" returnvariable="exportData" argumentcollection="#args#">
                     </cfcase>
                     
                     <cfdefaultcase>
                         <!--- Export All --->
-                        <cfquery name="exportData" datasource="PMSD_SATS">
-                            SELECT 
-                                ClientFirstName,
-                                ClientLastName,
-                                ClientEmail,
-                                ClientUserID,
-                                RecordedHours,
-                                DirectorateNameE,
-                                DirectorateAcronymE,
-                                DivisionNameE,
-                                DivisionAcronymE,
-                                BranchNameE,
-                                BranchAcronymE,
-                                SectionNameE,
-                                SectionAcronymE,
-                                PositionLevel,
-                                IsManager
-                            FROM dbo.TimekeepingEnriched
-                            <cfif batchFilter GT 0>
-                                WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer">
-                            </cfif>
-                            ORDER BY DirectorateNameE, ClientLastName, ClientFirstName
-                        </cfquery>
+                        <cfinvoke component="#application.query#" method="allExport" returnvariable="exportData" argumentcollection="#args#">
                     </cfdefaultcase>
                 </cfswitch>
                 
@@ -187,15 +116,14 @@
                         
                         <!--- Batch filter display --->
                         <cfif batchFilter GT 0>
-                            <cfquery name="batchInfo" datasource="PMSD_SATS">
-                                SELECT FileName, ImportDate FROM dbo.ImportBatch 
-                                WHERE BatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer">
-                            </cfquery>
-                            <cfif batchInfo.recordCount GT 0>
+                            <cfinvoke component="#application.query#" method="batchInfo" returnvariable="info">
+                                <cfinvokeargument name="batchFilter" value="#batchFilter#">
+                            </cfinvoke>
+                            <cfif info.recordCount GT 0>
                                 <cfoutput>
                                     <div class="alert alert-info">
-                                        <strong>Filtered to Batch ###batchFilter#:</strong> #batchInfo.FileName# 
-                                        (Imported: #dateFormat(batchInfo.ImportDate, "yyyy-mm-dd")#)
+                                        <strong>Filtered to Batch ###batchFilter#:</strong> #info.FileName# 
+                                        (Imported: #dateFormat(info.ImportDate, "yyyy-mm-dd")#)
                                         <a href="export.cfm" class="btn btn-sm btn-outline-primary ms-2">Clear Filter</a>
                                     </div>
                                 </cfoutput>
@@ -254,17 +182,7 @@
                         
                         <!--- Quick Stats --->
                         <div class="mt-4">
-                            <h5>Quick Statistics</h5>
-                            <cfquery name="quickStats" datasource="PMSD_SATS">
-                                SELECT 
-                                    (SELECT COUNT(*) FROM dbo.TimekeepingEnriched 
-                                     <cfif batchFilter GT 0>WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer"></cfif>) AS MatchedCount,
-                                    (SELECT COUNT(*) FROM dbo.UnmatchedClients 
-                                     <cfif batchFilter GT 0>WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer"></cfif>) AS UnmatchedCount,
-                                    (SELECT COUNT(DISTINCT DirectorateNameE) FROM dbo.TimekeepingEnriched 
-                                     <cfif batchFilter GT 0>WHERE ImportBatchID = <cfqueryparam value="#batchFilter#" cfsqltype="cf_sql_integer"></cfif>) AS DirectorateCount
-                            </cfquery>
-                            
+                            <h5>Quick Statistics</h5>                            
                             <cfoutput query="quickStats">
                                 <div class="row text-center">
                                     <div class="col-md-4">
@@ -354,6 +272,6 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/PMSD/SATS/Timetracking/resources/bootstrap/bootstrap/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
