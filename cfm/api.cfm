@@ -204,45 +204,24 @@
     
     <!--- Delete batch --->
     <cfcase value="deleteBatch">
-        <cftry>
-            <cftransaction>
-                <!--- Delete enriched records --->
-                <cfquery datasource="yourDatasource">
-                    DELETE FROM dbo.TimekeepingEnriched
-                    WHERE ImportBatchID = <cfqueryparam value="#url.batchId#" cfsqltype="cf_sql_integer">
-                </cfquery>
-                
-                <!--- Delete staging records --->
-                <cfquery datasource="yourDatasource">
-                    DELETE FROM dbo.TimekeepingStaging
-                    WHERE ImportBatchID = <cfqueryparam value="#url.batchId#" cfsqltype="cf_sql_integer">
-                </cfquery>
-                
-                <!--- Delete unmatched records --->
-                <cfquery datasource="yourDatasource">
-                    DELETE FROM dbo.UnmatchedClients
-                    WHERE ImportBatchID = <cfqueryparam value="#url.batchId#" cfsqltype="cf_sql_integer">
-                </cfquery>
-                
-                <!--- Delete batch record --->
-                <cfquery datasource="yourDatasource">
-                    DELETE FROM dbo.ImportBatch
-                    WHERE BatchID = <cfqueryparam value="#url.batchId#" cfsqltype="cf_sql_integer">
-                </cfquery>
-            </cftransaction>
-            
+        <cfinvoke
+            component="#application.query#"
+            method="deleteBatch"
+            returnvariable="deleteBatchResult">
+            <cfinvokeargument name="batchID" value="#val(url.batchId)#">
+        </cfinvoke>
+
+        <cfif deleteBatchResult.success>
             <cfset response = {
                 "success": true,
                 "message": "Batch deleted successfully"
             }>
-            
-            <cfcatch type="any">
-                <cfset response = {
-                    "success": false,
-                    "error": cfcatch.message
-                }>
-            </cfcatch>
-        </cftry>
+        <cfelse>
+            <cfset response = {
+                "success": false,
+                "error": deleteBatchResult.errorMessage
+            }>
+        </cfif>
         
         <cfoutput>#serializeJSON(response)#</cfoutput>
     </cfcase>

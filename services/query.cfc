@@ -1240,6 +1240,68 @@
         <cfreturn result>
     </cffunction>
 
+    <!---Deletes an import batch and all related records--->
+    <cffunction name="deleteBatch" access="public" returntype="struct" output="false">
+        <cfargument name="batchID" type="numeric" required="true">
+
+        <cfset var result = {
+            success = false,
+            errorMessage = ""
+        }>
+        <cfset var existingBatch = queryNew("")>
+
+        <cftry>
+            <cfif arguments.batchID LTE 0>
+                <cfthrow
+                    type="Import.InvalidBatch"
+                    message="A valid batch ID is required to delete.">
+            </cfif>
+
+            <cfquery name="existingBatch" datasource="PMSD_SATS">
+                SELECT BatchID
+                FROM dbo.ImportBatch
+                WHERE BatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+            </cfquery>
+
+            <cfif existingBatch.recordCount EQ 0>
+                <cfthrow
+                    type="Import.BatchNotFound"
+                    message="Batch ###arguments.batchID# was not found.">
+            </cfif>
+
+            <cftransaction>
+                <cfquery datasource="PMSD_SATS">
+                    DELETE FROM dbo.TimekeepingEnriched
+                    WHERE ImportBatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+                </cfquery>
+
+                <cfquery datasource="PMSD_SATS">
+                    DELETE FROM dbo.TimekeepingStaging
+                    WHERE ImportBatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+                </cfquery>
+
+                <cfquery datasource="PMSD_SATS">
+                    DELETE FROM dbo.UnmatchedClients
+                    WHERE ImportBatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+                </cfquery>
+
+                <cfquery datasource="PMSD_SATS">
+                    DELETE FROM dbo.ImportBatch
+                    WHERE BatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+                </cfquery>
+            </cftransaction>
+
+            <cfset result.success = true>
+
+            <cfcatch type="any">
+                <cfset result.success = false>
+                <cfset result.errorMessage = buildErrorMessage(cfcatch)>
+            </cfcatch>
+        </cftry>
+
+        <cfreturn result>
+    </cffunction>
+
     <!---Returns all the directorates--->
     <cffunction name="getDirectorates" access="public" returntype="query">
         <cfquery name="qryDirectorate" datasource="#application.branchDatasource#">

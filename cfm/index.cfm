@@ -1,8 +1,27 @@
 <cfif structKeyExists(url, "page") AND url.page EQ 'AccessDenied'>
     <cfinclude template="AccessDenied.cfm">
 <cfelse>
-    <cfinclude template="navbar.cfm">
     <cfparam name="url.page" default="1">
+    <cfset deleteBatchError = "">
+
+    <cfif structKeyExists(form, "deleteBatchButton")>
+        <cfinvoke
+            component="#application.query#"
+            method="deleteBatch"
+            returnvariable="deleteBatchResult">
+            <cfinvokeargument
+                name="batchID"
+                value="#structKeyExists(form, 'deleteBatchID') ? val(form.deleteBatchID) : 0#">
+        </cfinvoke>
+
+        <cfif deleteBatchResult.success>
+            <cflocation url="index.cfm?page=#val(url.page)#&batchDeleted=1" addtoken="false">
+        <cfelse>
+            <cfset deleteBatchError = deleteBatchResult.errorMessage>
+        </cfif>
+    </cfif>
+
+    <cfinclude template="navbar.cfm">
     <cfset currentPage = val(url.page)>
     <cfset pageSize = 10>
     <cfset startRow = (currentPage - 1) * pageSize + 1>
@@ -38,6 +57,21 @@
     <div class="container-fluid mt-perso">
         <div class="row">
             <div class="col-md-8 offset-md-2">
+
+                <cfif structKeyExists(url, "batchDeleted") AND val(url.batchDeleted) EQ 1>
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <i class="fas fa-check-circle"></i> Batch deleted successfully.
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                </cfif>
+
+                <cfif len(deleteBatchError)>
+                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                        <strong>Delete failed:</strong>
+                        <cfoutput>#encodeForHTML(deleteBatchError)#</cfoutput>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                </cfif>
                 
                 <cfif structKeyExists(form, "uploadFile")>
                     <cftry>
@@ -188,13 +222,19 @@
                                                         #ProcessingStatus#
                                                     </span>
                                                 </td>
-                                                <td>
+                                                <td class="text-nowrap">
                                                     <a href="dashboard.cfm?batch=#BatchID#" class="btn btn-sm btn-outline-primary" title="View Dashboard">
                                                         <i class="fas fa-eye"></i>
                                                     </a>
                                                     <a href="export.cfm?batch=#BatchID#" class="btn btn-sm btn-outline-success" title="Export">
                                                         <i class="fas fa-download"></i>
                                                     </a>
+                                                    <form action="index.cfm?page=#currentPage#" method="post" class="d-inline" onsubmit="return confirm('Delete batch ###BatchID# (#jsStringFormat(FileName)#) and all of its imported data? This cannot be undone.');">
+                                                        <input type="hidden" name="deleteBatchID" value="#BatchID#">
+                                                        <button type="submit" name="deleteBatchButton" value="1" class="btn btn-sm btn-outline-danger" title="Delete Batch">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    </form>
                                                 </td>
                                             </tr>
                                         </cfoutput>

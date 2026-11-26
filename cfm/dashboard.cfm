@@ -137,6 +137,28 @@
     <cfif recoveryResult.success>
         <cflocation url="dashboard.cfm?batch=#batchFilter#&tab=Active&recovered=1" addtoken="false">
     </cfif>
+<cfelseif structKeyExists(form, "deleteBatchButton")>
+    <cfset deleteBatchResult = {
+        success = false,
+        errorMessage = ""
+    }>
+
+    <cfif batchFilter LTE 0>
+        <cfset deleteBatchResult.errorMessage = "Please select a specific batch before deleting.">
+    <cfelse>
+        <cfinvoke
+            component="#application.query#"
+            method="deleteBatch"
+            returnvariable="deleteBatchResult">
+            <cfinvokeargument
+                name="batchID"
+                value="#batchFilter#">
+        </cfinvoke>
+    </cfif>
+
+    <cfif deleteBatchResult.success>
+        <cflocation url="index.cfm?batchDeleted=1" addtoken="false">
+    </cfif>
 </cfif>
 
 <cfinclude template="navbar.cfm">
@@ -200,15 +222,20 @@
             <div class="col-md-8">
                 <cfif batchFilter GT 0 AND isDefined("info") AND info.recordCount GT 0>
                     <cfoutput>
-                    <h2 class="align-items-center d-flex gap-3"><div><i class="fas fa-filter"></i> Batch Details</div>
+                    <h2 class="align-items-center d-flex gap-3 flex-wrap"><div><i class="fas fa-filter"></i> Batch Details</div>
                         <span class="badge bg-<cfif info.ProcessingStatus EQ 'Completed'>success<cfelseif info.ProcessingStatus EQ 'Processing'>warning<cfelse>danger</cfif>">
                             #info.ProcessingStatus#
                         </span>
                     </h2>
-                    <p class="text-muted mb-0">
+                    <p class="text-muted mb-2">
                     Viewing: <strong>#info.FileName#</strong> 
                     (Imported: #dateFormat(info.ImportDate, "mmm d, yyyy")#)
                     </p>
+                    <form action="dashboard.cfm?batch=#batchFilter#" method="post" class="d-inline" onsubmit="return confirm('Delete batch ###batchFilter# (#jsStringFormat(info.FileName)#) and all of its imported data? This cannot be undone.');">
+                        <button type="submit" name="deleteBatchButton" value="1" class="btn btn-outline-danger btn-sm">
+                            <i class="fas fa-trash"></i> Delete Batch
+                        </button>
+                    </form>
                     </cfoutput>
                 <cfelse>
                     <h2><i class="fas fa-chart-line"></i> All Batches Overview</h2>
@@ -322,6 +349,17 @@
                 <i class="fas fa-exclamation-circle"></i>
                 <cfoutput>
                     #encodeForHTML(recoveryResult.errorMessage)#
+                </cfoutput>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        <cfelseif isDefined("deleteBatchResult")
+            AND NOT deleteBatchResult.success
+            AND len(deleteBatchResult.errorMessage)>
+
+            <div class="alert alert-danger text-wrap" role="alert">
+                <i class="fas fa-exclamation-circle"></i>
+                <cfoutput>
+                    #encodeForHTML(deleteBatchResult.errorMessage)#
                 </cfoutput>
                 <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
