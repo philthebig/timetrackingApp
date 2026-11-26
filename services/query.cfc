@@ -405,14 +405,18 @@
         <cfset var emailMatches = reMatchNoCase("[^@\s]+@(?:cra-arc\.gc\.ca|canada\.ca)", arguments.clientContact)>
 
         <!---Finds other type of email--->
-        <cfset emails = reMatchNoCase("[^@\s]+@[^@\s]+.ca",arguments.clientContact)>
+        <cfset var emails = reMatchNoCase("[^@\s]+@[^@\s]+\.ca", arguments.clientContact)>
 
         <!---If there is a match give the client the matching email--->
         <cfif arrayLen(emailMatches) GT 0>
             <cfset client.email = lcase(trim(emailMatches[1]))>
-        <cfelse>
+        <cfelseif arrayLen(emails) GT 0>
             <!---Else give the client the other email and fill in the error message--->
-            <cfset client.email = emails[1]>
+            <cfset client.email = lcase(trim(emails[1]))>
+            <cfset client.errorMessage = "No valid email address found in contact">
+        <cfelse>
+            <!---No email at all: leave unmatched instead of crashing on empty array access--->
+            <cfset client.email = "">
             <cfset client.errorMessage = "No valid email address found in contact">
         </cfif>
 
