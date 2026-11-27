@@ -1,6 +1,7 @@
 <cfcomponent>
     <!---Main function, calls all necessary functions--->
     <cffunction name="processUpload" access="public" returntype="struct" output="false">
+        <cfsetting requesttimeout="600">
         <cfset var result = {
             success = false,
             batchID = 0,
@@ -439,216 +440,14 @@
         <cfreturn lcase(reReplace(arguments.value, "[\s\-\.'’]", "", "all"))>
     </cffunction>
 
-    <cffunction name="escapeLdapValue" access="private" returntype="string" output="false">
-        <cfargument name="value" type="string" required="true">
-        <cfset var escaped = arguments.value>
+    <!---Loads the branch directory once so each spreadsheet row does not query it.--->
+    <cffunction name="buildDirectoryNameIndex" access="private" returntype="struct" output="false">
+        <cfset var qryUsers = queryNew("")>
+        <cfset var index = {}>
+        <cfset var hit = {}>
+        <cfset var nameKey = "">
 
-        <cfset escaped = replace(escaped, "\", "\5c", "all")>
-        <cfset escaped = replace(escaped, "*", "\2a", "all")>
-        <cfset escaped = replace(escaped, "(", "\28", "all")>
-        <cfset escaped = replace(escaped, ")", "\29", "all")>
-        <cfset escaped = replace(escaped, chr(0), "\00", "all")>
-        <cfset escaped = replace(escaped, '"', "\22", "all")>
-
-        <cfreturn escaped>
-    </cffunction>
-
-    <cffunction name="queryActiveDirectoryByName" access="private" returntype="query" output="false">
-        <cfargument name="filter" type="string" required="true">
-
-        <!---The LDAP tag writes this query into the caller scope, same as the email lookup.--->
-        <cftry>
-            <cf_ldap
-                filter="#arguments.filter#"
-                attributes="cn,mail,givenName,sn,department,division,company"
-                name="qryADByName">
-            <cfcatch type="any">
-                <cfset qryADByName = queryNew("")>
-            </cfcatch>
-        </cftry>
-
-        <cfif NOT isQuery(qryADByName)>
-            <cfset qryADByName = queryNew("")>
-        </cfif>
-
-        <cfreturn qryADByName>
-    </cffunction>
-
-    <!---Maps an Active Directory department to one current directorate.--->
-    <cffunction name="findDirectoratesByOrgText" access="private" returntype="query" output="false">
-        <cfargument name="orgText" type="string" required="true">
-        <cfset var qryDirectorate = queryNew("")>
-        <cfset var orgValue = trim(arguments.orgText)>
-
-        <cfif NOT len(orgValue)>
-            <cfreturn qryDirectorate>
-        </cfif>
-
-        <cfquery name="qryDirectorate" datasource="#application.branchDatasource#">
-            SELECT
-                ID,
-                NameE,
-                NameF,
-                AcronymE,
-                AcronymF
-            FROM dbo.tblDirectorates
-            WHERE DateTo IS NULL
-            AND BranchID = 1
-            AND (
-                NameE = <cfqueryparam value="#orgValue#" cfsqltype="cf_sql_varchar">
-                OR NameF = <cfqueryparam value="#orgValue#" cfsqltype="cf_sql_varchar">
-                OR AcronymE = <cfqueryparam value="#orgValue#" cfsqltype="cf_sql_varchar">
-                OR AcronymF = <cfqueryparam value="#orgValue#" cfsqltype="cf_sql_varchar">
-                OR (
-                    LEN(NameE) >= 8
-                    AND <cfqueryparam value="#orgValue#" cfsqltype="cf_sql_varchar"> LIKE '%' + NameE + '%'
-                )
-                OR (
-                    LEN(NameF) >= 8
-                    AND <cfqueryparam value="#orgValue#" cfsqltype="cf_sql_varchar"> LIKE '%' + NameF + '%'
-                )
-            )
-        </cfquery>
-
-        <cfreturn qryDirectorate>
-    </cffunction>
-
-    <cffunction name="directoryOrgValue" access="private" returntype="string" output="false">
-        <cfargument name="directoryQuery" type="query" required="true">
-        <cfargument name="columnName" type="string" required="true">
-        <cfargument name="rowNumber" type="numeric" required="false" default="1">
-
-        <cfif NOT listFindNoCase(arguments.directoryQuery.columnList, arguments.columnName)>
-            <cfreturn "">
-        </cfif>
-
-        <cfreturn trim(arguments.directoryQuery[arguments.columnName][arguments.rowNumber] & "")>
-    </cffunction>
-
-    <!---Uses Active Directory when the person is missing from the branch directory.--->
-    <cffunction name="lookupDirectorateInActiveDirectory" access="private" returntype="struct" output="false">
-        <cfargument name="firstName" type="string" required="true">
-        <cfargument name="lastName" type="string" required="true">
-
-        <cfset var result = {
-            found = false,
-            errorMessage = "",
-            userID = "",
-            email = "",
-            firstName = arguments.firstName,
-            lastName = arguments.lastName,
-            directorateNameE = "",
-            directorateNameF = "",
-            directorateAcronymE = "",
-            directorateAcronymF = "",
-            directorateID = ""
-        }>
-        <cfset var exactFilter = "">
-        <cfset var prefixFilter = "">
-        <cfset var qryADByName = queryNew("")>
-        <cfset var accounts = {}>
-        <cfset var accountId = "">
-        <cfset var orgColumn = "">
-        <cfset var orgText = "">
-        <cfset var seenOrgText = "">
-        <cfset var qryDirectorate = queryNew("")>
-
-        <cfset exactFilter = "(&(objectCategory=person)(objectClass=user)(sn="
-            & escapeLdapValue(arguments.lastName)
-            & ")(givenName="
-            & escapeLdapValue(arguments.firstName)
-            & "))">
-        <cfset qryADByName = queryActiveDirectoryByName(exactFilter)>
-
-        <cfif NOT isQuery(qryADByName) OR qryADByName.recordCount EQ 0>
-            <cfset prefixFilter = "(&(objectCategory=person)(objectClass=user)(sn="
-                & escapeLdapValue(arguments.lastName)
-                & ")(givenName="
-                & escapeLdapValue(arguments.firstName)
-                & "*))">
-            <cfset qryADByName = queryActiveDirectoryByName(prefixFilter)>
-        </cfif>
-
-        <cfif NOT isQuery(qryADByName) OR qryADByName.recordCount EQ 0>
-            <cfset result.errorMessage = "No matching user found for name: #arguments.lastName#, #arguments.firstName#">
-            <cfreturn result>
-        </cfif>
-
-        <cfloop query="qryADByName">
-            <cfset accountId = directoryOrgValue(qryADByName, "cn", qryADByName.currentRow)>
-            <cfif NOT len(accountId)>
-                <cfset accountId = "row-" & qryADByName.currentRow>
-            </cfif>
-            <cfset accounts[accountId] = true>
-        </cfloop>
-
-        <cfif structCount(accounts) NEQ 1>
-            <cfset result.errorMessage = "More than one Active Directory account matches #arguments.lastName#, #arguments.firstName#">
-            <cfreturn result>
-        </cfif>
-
-        <cfset result.userID = left(directoryOrgValue(qryADByName, "cn"), 50)>
-        <cfset result.email = lcase(directoryOrgValue(qryADByName, "mail"))>
-        <cfif len(directoryOrgValue(qryADByName, "givenName"))>
-            <cfset result.firstName = directoryOrgValue(qryADByName, "givenName")>
-        </cfif>
-        <cfif len(directoryOrgValue(qryADByName, "sn"))>
-            <cfset result.lastName = directoryOrgValue(qryADByName, "sn")>
-        </cfif>
-        <cfif NOT len(result.userID)>
-            <cfset result.userID = left(
-                "ad-" & compactName(arguments.lastName) & "-" & compactName(arguments.firstName),
-                50
-            )>
-        </cfif>
-
-        <cfloop list="department,division,company" index="orgColumn">
-            <cfset orgText = directoryOrgValue(qryADByName, orgColumn)>
-            <cfif NOT len(orgText)>
-                <cfcontinue>
-            </cfif>
-
-            <cfset seenOrgText = orgText>
-            <cfset qryDirectorate = findDirectoratesByOrgText(orgText)>
-
-            <cfif qryDirectorate.recordCount EQ 1>
-                <cfset result.found = true>
-                <cfset result.directorateID = qryDirectorate.ID[1]>
-                <cfset result.directorateNameE = qryDirectorate.NameE[1] & "">
-                <cfset result.directorateNameF = qryDirectorate.NameF[1] & "">
-                <cfset result.directorateAcronymE = qryDirectorate.AcronymE[1] & "">
-                <cfset result.directorateAcronymF = qryDirectorate.AcronymF[1] & "">
-                <cfset result.errorMessage = "">
-                <cfreturn result>
-            </cfif>
-
-            <cfif qryDirectorate.recordCount GT 1>
-                <cfset result.errorMessage = "Active Directory #orgColumn# '#orgText#' matches more than one directorate for #arguments.lastName#, #arguments.firstName#">
-                <cfreturn result>
-            </cfif>
-        </cfloop>
-
-        <cfif len(seenOrgText)>
-            <cfset result.errorMessage = "Active Directory department '#seenOrgText#' does not match a directorate for #arguments.lastName#, #arguments.firstName#">
-        <cfelse>
-            <cfset result.errorMessage = "No directorate was found in Active Directory for #arguments.lastName#, #arguments.firstName#">
-        </cfif>
-
-        <cfreturn result>
-    </cffunction>
-
-    <cffunction name="findUsersByName" access="private" returntype="query" output="false">
-        <cfargument name="firstName" type="string" required="true">
-        <cfargument name="lastName" type="string" required="true">
-        <cfset var qryByName = queryNew("")>
-        <cfset var compactFirst = compactName(arguments.firstName)>
-        <cfset var compactLast = compactName(arguments.lastName)>
-
-        <cfif NOT len(compactFirst) OR NOT len(compactLast)>
-            <cfreturn qryByName>
-        </cfif>
-
-        <cfquery name="qryByName" datasource="#application.branchDatasource#">
+        <cfquery name="qryUsers" datasource="#application.branchDatasource#">
             SELECT
                 userID,
                 firstName,
@@ -677,13 +476,27 @@
                 SectionAcronymF,
                 SectionID
             FROM dbo.vUserInfo
-            WHERE LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(lastName, ''), '-', ''), ' ', ''), '''', ''), '.', ''), NCHAR(8217), ''))
-                COLLATE Latin1_General_CI_AI = <cfqueryparam value="#compactLast#" cfsqltype="cf_sql_varchar">
-            AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(firstName, ''), '-', ''), ' ', ''), '''', ''), '.', ''), NCHAR(8217), ''))
-                COLLATE Latin1_General_CI_AI = <cfqueryparam value="#compactFirst#" cfsqltype="cf_sql_varchar">
         </cfquery>
 
-        <cfreturn qryByName>
+        <cfloop query="qryUsers">
+            <cfset hit = directoryHit(qryUsers)>
+            <cfset nameKey = compactName(hit.lastName) & "|" & compactName(hit.firstName)>
+
+            <cfif NOT len(trim(hit.userID)) OR nameKey EQ "|">
+                <cfcontinue>
+            </cfif>
+
+            <cfif NOT structKeyExists(index, nameKey)>
+                <cfset index[nameKey] = {
+                    ambiguous = false,
+                    user = hit
+                }>
+            <cfelseif compareNoCase(index[nameKey].user.userID, hit.userID) NEQ 0>
+                <cfset index[nameKey].ambiguous = true>
+            </cfif>
+        </cfloop>
+
+        <cfreturn index>
     </cffunction>
 
     <cffunction name="directoryHit" access="private" returntype="struct" output="false">
@@ -757,6 +570,7 @@
     <!---Finds the right client--->
     <cffunction name="resolveClient" access="private" returntype="struct" output="false">
         <cfargument name="clientContact" type="string" required="true">
+        <cfargument name="nameIndex" type="struct" required="false">
 
         <cfset var client = {
             found = false,
@@ -900,11 +714,9 @@
 
         <!---No email: match the primary contact when exactly one employee has that name.--->
         <cfset var parsedNames = parseContactNames(arguments.clientContact)>
-        <cfset var qryByName = queryNew("")>
-        <cfset var directoryRow = {}>
-        <cfset var seenUsers = {}>
-        <cfset var onlyUserKeys = []>
-        <cfset var directoryMatch = {}>
+        <cfset var activeIndex = {}>
+        <cfset var nameKey = "">
+        <cfset var indexedName = {}>
 
         <cfif arrayLen(parsedNames) EQ 0>
             <cfreturn client>
@@ -912,60 +724,28 @@
 
         <cfset client.firstName = parsedNames[1].firstName>
         <cfset client.lastName = parsedNames[1].lastName>
-        <cfset qryByName = findUsersByName(
-            firstName = parsedNames[1].firstName,
-            lastName = parsedNames[1].lastName
-        )>
 
-        <cfloop query="qryByName">
-            <cfset directoryRow = directoryHit(qryByName)>
-
-            <cfif len(trim(directoryRow.userID)) AND NOT structKeyExists(seenUsers, directoryRow.userID)>
-                <cfset seenUsers[directoryRow.userID] = directoryRow>
-            </cfif>
-        </cfloop>
-
-        <cfset onlyUserKeys = structKeyArray(seenUsers)>
-
-        <cfif arrayLen(onlyUserKeys) EQ 1>
-            <cfset applyDirectoryUser(client, seenUsers[onlyUserKeys[1]])>
-            <cfreturn client>
-        </cfif>
-
-        <cfif arrayLen(onlyUserKeys) GT 1>
-            <cfset client.errorMessage = "More than one employee matches #parsedNames[1].lastName#, #parsedNames[1].firstName#">
-            <cfreturn client>
-        </cfif>
-
-        <!---Not in the branch directory: take the directorate from Active Directory.--->
-        <cfset directoryMatch = lookupDirectorateInActiveDirectory(
-            firstName = parsedNames[1].firstName,
-            lastName = parsedNames[1].lastName
-        )>
-
-        <cfif directoryMatch.found>
-            <cfset client.found = true>
-            <cfset client.userID = directoryMatch.userID>
-            <cfset client.firstName = directoryMatch.firstName>
-            <cfset client.lastName = directoryMatch.lastName>
-            <cfif len(trim(directoryMatch.email))>
-                <cfset client.email = directoryMatch.email>
-            </cfif>
-            <cfset client.directorateNameE = directoryMatch.directorateNameE>
-            <cfset client.directorateNameF = directoryMatch.directorateNameF>
-            <cfset client.directorateAcronymE = directoryMatch.directorateAcronymE>
-            <cfset client.directorateAcronymF = directoryMatch.directorateAcronymF>
-            <cfset client.directorateID = directoryMatch.directorateID>
-            <cfset client.errorMessage = "">
-            <cfreturn client>
-        </cfif>
-
-        <cfif len(trim(directoryMatch.errorMessage))>
-            <cfset client.errorMessage = directoryMatch.errorMessage>
+        <cfif structKeyExists(arguments, "nameIndex")>
+            <cfset activeIndex = arguments.nameIndex>
         <cfelse>
-            <cfset client.errorMessage = "No matching user found for name: #parsedNames[1].lastName#, #parsedNames[1].firstName#">
+            <cfset activeIndex = buildDirectoryNameIndex()>
         </cfif>
 
+        <cfset nameKey = compactName(parsedNames[1].lastName) & "|" & compactName(parsedNames[1].firstName)>
+
+        <cfif structKeyExists(activeIndex, nameKey)>
+            <cfset indexedName = activeIndex[nameKey]>
+
+            <cfif indexedName.ambiguous>
+                <cfset client.errorMessage = "More than one employee matches #parsedNames[1].lastName#, #parsedNames[1].firstName#">
+                <cfreturn client>
+            </cfif>
+
+            <cfset applyDirectoryUser(client, indexedName.user)>
+            <cfreturn client>
+        </cfif>
+
+        <cfset client.errorMessage = "No matching user found for name: #parsedNames[1].lastName#, #parsedNames[1].firstName#">
         <cfreturn client>
     </cffunction>
 
@@ -1104,6 +884,7 @@
         <cfset var contactCacheKey = "">
         <cfset var storedEmail = "">
         <cfset var rowError = "">
+        <cfset var nameIndex = buildDirectoryNameIndex()>
 
         <cfquery name="stagingRows" datasource="PMSD_SATS">
             SELECT
@@ -1132,7 +913,8 @@
             <cfelse>
                 <!---Finds the right client--->
                 <cfset client = resolveClient(
-                    stagingRows.ClientContact[stagingRows.currentRow]
+                    clientContact = stagingRows.ClientContact[stagingRows.currentRow],
+                    nameIndex = nameIndex
                 )>
                 <cfset clientCache[contactCacheKey] = client>
             </cfif>
