@@ -3419,7 +3419,7 @@
         <cfargument name="styleCache" type="struct" required="true">
 
         <cfset var stored = storedCell(arguments.cell)>
-        <cfset var format = arguments.format>
+        <cfset var cellFormat = arguments.format>
         <cfset var poiCell = "">
         <cfset var style = "">
 
@@ -3430,8 +3430,8 @@
         <cfset poiCell = arguments.poiRow.createCell(javacast("int", arguments.poiColumn))>
         <cfif stored.t EQ "n" OR stored.t EQ "d">
             <cfset poiCell.setCellValue(javacast("double", val(stored.v)))>
-            <cfif stored.t EQ "d" AND (NOT len(format) OR compareNoCase(format, "General") EQ 0)>
-                <cfset format = "mm-dd-yy">
+            <cfif stored.t EQ "d" AND (NOT len(cellFormat) OR compareNoCase(cellFormat, "General") EQ 0)>
+                <cfset cellFormat = "mm-dd-yy">
             </cfif>
         <cfelse>
             <cfset poiCell.setCellValue(javacast("string", stored.v & ""))>
@@ -3441,7 +3441,7 @@
             poiBook = arguments.poiBook,
             dataFormat = arguments.dataFormat,
             styleCache = arguments.styleCache,
-            format = format,
+            format = cellFormat,
             wrap = arguments.wrap
         )>
         <cfif NOT isSimpleValue(style)>
