@@ -247,7 +247,7 @@
             <cfset compareIsPrevious = compareBatchID GT 0 AND compareBatchID EQ previousBatchID>
 
             <cfif compareBatchID GT 0>
-                <cfset compareVersus = "Batch #" & compareBatchID>
+                <cfset compareVersus = "Batch ##" & compareBatchID>
                 <cfif isDate(compareImportDate)>
                     <cfset compareVersus = compareVersus & " (" & dateFormat(compareImportDate, "mmm d, yyyy") & ")">
                 </cfif>
@@ -332,12 +332,12 @@
         <cfset chartCurrentLabel = "This batch">
         <cfset chartCompareLabel = "Comparison">
         <cfif batchFilter GT 0 AND isDefined("info") AND info.recordCount GT 0>
-            <cfset chartCurrentLabel = "Batch #" & batchFilter & " (" & dateFormat(info.ImportDate, "mm/dd/yyyy") & ")">
+            <cfset chartCurrentLabel = "Batch ##" & batchFilter & " (" & dateFormat(info.ImportDate, "mm/dd/yyyy") & ")">
         </cfif>
         <cfif compareBatchID GT 0 AND isDate(compareImportDate)>
-            <cfset chartCompareLabel = "Batch #" & compareBatchID & " (" & dateFormat(compareImportDate, "mm/dd/yyyy") & ")">
+            <cfset chartCompareLabel = "Batch ##" & compareBatchID & " (" & dateFormat(compareImportDate, "mm/dd/yyyy") & ")">
         <cfelseif compareBatchID GT 0>
-            <cfset chartCompareLabel = "Batch #" & compareBatchID>
+            <cfset chartCompareLabel = "Batch ##" & compareBatchID>
         </cfif>
 
         <cfloop array="#chartRows#" index="chartRow">
