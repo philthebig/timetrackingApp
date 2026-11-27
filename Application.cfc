@@ -51,10 +51,23 @@
         <cfargument name="targetPage" type="string" required="true">
 
         <cfif IsDefined("url.Reset")>
-			<cfset onApplicationStart()>
-            <cfset onSessionStart()>
-			<cfset q = reReplaceNoCase(cgi.query_string, "Reset", "",'all')>
-			<cflocation url="#cgi.SCRIPT_NAME#?#q#" addtoken="no">
+            <cftry>
+                <cfset onApplicationStart()>
+                <cfset onSessionStart()>
+                <cfset q = reReplaceNoCase(cgi.query_string, "Reset", "", "all")>
+                <cflocation url="#cgi.SCRIPT_NAME#?#q#" addtoken="no">
+                <cfcatch type="any">
+                    <cfoutput>
+                        <h2>The application could not restart</h2>
+                        <p><strong>Message:</strong> #encodeForHTML(cfcatch.message)#</p>
+                        <cfif structKeyExists(cfcatch, "detail") AND isSimpleValue(cfcatch.detail) AND len(cfcatch.detail)>
+                            <p><strong>Detail:</strong> #encodeForHTML(cfcatch.detail)#</p>
+                        </cfif>
+                    </cfoutput>
+                    <cfdump var="#cfcatch#">
+                    <cfabort>
+                </cfcatch>
+            </cftry>
 		</cfif>
 
         <cfif NOT structKeyExists(session, "pAccess")>

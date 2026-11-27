@@ -2445,7 +2445,7 @@
             var workbookXml = readZipText(arguments.sourceZip, "xl/workbook.xml");
             var relsXml = readZipText(arguments.sourceZip, "xl/_rels/workbook.xml.rels");
             var relationships = relationshipTargets(relsXml);
-            var sheetPattern = createObject("java", "java.util.regex.Pattern").compile("(?i)" & chr(60) & "sheet\\b[^>]*>");
+            var sheetPattern = createObject("java", "java.util.regex.Pattern").compile("(?i)" & chr(60) & "sheet\\b[^" & chr(62) & "]*" & chr(62));
             var matcher = sheetPattern.matcher(workbookXml);
             var sheets = [];
             var tag = "";
@@ -2516,7 +2516,7 @@
             var newLetter = "";
             var shifted = "";
             var matches = {};
-            var rowPattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "row\\b[^>]*>.*?" & chr(60) & "/row>");
+            var rowPattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "row\\b[^" & chr(62) & "]*" & chr(62) & ".*?" & chr(60) & "/row" & chr(62));
             var matcher = "";
             var buffer = createObject("java", "java.lang.StringBuffer").init();
             var rowXml = "";
@@ -2563,7 +2563,7 @@
         <cfargument name="strings" type="array" required="true">
 
         <cfscript>
-            var rowPattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "row\\b[^>]*>.*?" & chr(60) & "/row>");
+            var rowPattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "row\\b[^" & chr(62) & "]*" & chr(62) & ".*?" & chr(60) & "/row" & chr(62));
             var matcher = rowPattern.matcher(arguments.sheetXml);
             var rowXml = "";
             var cells = [];
@@ -2596,7 +2596,7 @@
         <cfargument name="strings" type="array" required="true">
 
         <cfscript>
-            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "c\\b([^>]*?)(?:/>|>(.*?)" & chr(60) & "/c>)");
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "c\\b([^" & chr(62) & "]*?)(?:/" & chr(62) & "|" & chr(62) & "(.*?)" & chr(60) & "/c" & chr(62) & ")");
             var matcher = pattern.matcher(arguments.rowXml);
             var cells = [];
             var attributes = "";
@@ -2656,7 +2656,7 @@
             var index = 0;
 
             if (findNoCase('t="s"', arguments.attributes)) {
-                pattern = createObject("java", "java.util.regex.Pattern").compile(chr(60) & "v>(\\d+)" & chr(60) & "/v>");
+                pattern = createObject("java", "java.util.regex.Pattern").compile(chr(60) & "v" & chr(62) & "(\\d+)" & chr(60) & "/v" & chr(62));
                 matcher = pattern.matcher(body);
                 if (matcher.find()) {
                     index = val(matcher.group(javacast("int", 1)));
@@ -2671,7 +2671,7 @@
                 return decodeXml(joinedTextNodes(body));
             }
 
-            pattern = createObject("java", "java.util.regex.Pattern").compile(chr(60) & "v>([^" & chr(60) & "]*)" & chr(60) & "/v>");
+            pattern = createObject("java", "java.util.regex.Pattern").compile(chr(60) & "v" & chr(62) & "([^" & chr(60) & "]*)" & chr(60) & "/v" & chr(62));
             matcher = pattern.matcher(body);
             if (matcher.find()) {
                 return decodeXml(matcher.group(javacast("int", 1)));
@@ -2687,7 +2687,7 @@
 
         <cfscript>
             var xml = readZipText(arguments.sourceZip, arguments.entryName);
-            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "si\\b[^>]*>.*?" & chr(60) & "/si>");
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "si\\b[^" & chr(62) & "]*" & chr(62) & ".*?" & chr(60) & "/si" & chr(62));
             var matcher = pattern.matcher(xml);
             var strings = [];
 
@@ -2703,7 +2703,7 @@
         <cfargument name="xml" type="string" required="true">
 
         <cfscript>
-            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "t\\b[^>]*>.*?" & chr(60) & "/t>");
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "t\\b[^" & chr(62) & "]*" & chr(62) & ".*?" & chr(60) & "/t" & chr(62));
             var matcher = pattern.matcher(arguments.xml);
             var text = "";
 
@@ -2789,7 +2789,7 @@
         <cfargument name="cellXml" type="string" required="true">
 
         <cfscript>
-            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "c\\b[^>]*\\br=""" & arguments.letter & arguments.rowNumber & """[^>]*(?:/>|>.*?" & chr(60) & "/c>)");
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "c\\b[^" & chr(62) & "]*\\br=""" & arguments.letter & arguments.rowNumber & """[^" & chr(62) & "]*(?:/" & chr(62) & "|" & chr(62) & ".*?" & chr(60) & "/c" & chr(62) & ")");
             var matcher = pattern.matcher(arguments.rowXml);
             var buffer = createObject("java", "java.lang.StringBuffer").init();
 
@@ -2811,7 +2811,7 @@
         <cfscript>
             var escaped = xmlEscape(arguments.text);
             var space = find(xmlNewline(), escaped) ? ' xml:space="preserve"' : "";
-            return chr(60) & "c r=""" & arguments.letter & arguments.rowNumber & """ t=""inlineStr"">" & chr(60) & "is>" & chr(60) & "t" & space & ">" & escaped & chr(60) & "/t>" & chr(60) & "/is>" & chr(60) & "/c>";
+            return chr(60) & "c r=""" & arguments.letter & arguments.rowNumber & """ t=""inlineStr""" & chr(62) & chr(60) & "is" & chr(62) & chr(60) & "t" & space & chr(62) & escaped & chr(60) & "/t" & chr(62) & chr(60) & "/is" & chr(62) & chr(60) & "/c" & chr(62);
         </cfscript>
     </cffunction>
 
@@ -2862,8 +2862,8 @@
 
         <cfscript>
             var value = replace(arguments.text, "&", "&amp;", "all");
-            value = replace(value, "<", "&lt;", "all");
-            value = replace(value, ">", "&gt;", "all");
+            value = replace(value, chr(60), "&lt;", "all");
+            value = replace(value, chr(62), "&gt;", "all");
             value = reReplace(value, "\r\n|\r|\n", xmlNewline(), "all");
             return value;
         </cfscript>
@@ -2874,8 +2874,8 @@
 
         <cfscript>
             var value = reReplace(arguments.text, xmlNewline() & "|" & xmlCarriageReturn(), chr(10), "all");
-            value = replace(value, "&lt;", "<", "all");
-            value = replace(value, "&gt;", ">", "all");
+            value = replace(value, "&lt;", chr(60), "all");
+            value = replace(value, "&gt;", chr(62), "all");
             value = replace(value, "&quot;", '"', "all");
             value = replace(value, "&apos;", "'", "all");
             value = replace(value, "&amp;", "&", "all");
@@ -2940,7 +2940,7 @@
         <cfargument name="relsXml" type="string" required="true">
 
         <cfscript>
-            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?i)" & chr(60) & "Relationship\\b[^>]*>");
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?i)" & chr(60) & "Relationship\\b[^" & chr(62) & "]*" & chr(62));
             var matcher = pattern.matcher(arguments.relsXml);
             var targets = {};
             var tag = "";
