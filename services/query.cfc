@@ -42,6 +42,9 @@
             <cfset batchID = createImportBatch(uploadInfo.clientFile)>
             <cfset result.batchID = batchID>
 
+            <!---Keeps the original workbook so export can add one column to that file.--->
+            <cfset storeOriginalUpload(batchID, filePath)>
+
             <!---Reads every column from the data sheet and keeps it for export.--->
             <cfset sourceGrid = readSourceGrid(filePath)>
             <cfset saveSourceGrid(batchID, sourceGrid)>
@@ -111,6 +114,33 @@
         <cfif NOT directoryExists(uploadDirectory)>
             <cfdirectory action="create" directory="#uploadDirectory#">
         </cfif>
+    </cffunction>
+
+    <!---Keeps a byte-for-byte copy of the uploaded workbook.--->
+    <cffunction name="storeOriginalUpload" access="private" returntype="void" output="false">
+        <cfargument name="batchID" type="numeric" required="true">
+        <cfargument name="filePath" type="string" required="true">
+
+        <cfset var sourceDirectory = expandPath("./uploads/sources/")>
+        <cfset var extension = lcase(listLast(arguments.filePath, "."))>
+        <cfset var storedPath = "">
+
+        <cfset ensureSourceStorage()>
+        <cfif NOT directoryExists(sourceDirectory)>
+            <cfdirectory action="create" directory="#sourceDirectory#">
+        </cfif>
+        <cfif NOT len(extension)>
+            <cfset extension = "xlsx">
+        </cfif>
+
+        <cfset storedPath = sourceDirectory & "batch-" & arguments.batchID & "." & extension>
+        <cffile action="copy" source="#arguments.filePath#" destination="#storedPath#" nameconflict="overwrite">
+
+        <cfquery datasource="PMSD_SATS">
+            UPDATE dbo.ImportBatch
+            SET SourceFile = <cfqueryparam value="#storedPath#" cfsqltype="cf_sql_varchar">
+            WHERE BatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+        </cfquery>
     </cffunction>
 
     <!---Checks the type of the file to make sure it's a .xls or a .xlsx--->
@@ -264,6 +294,11 @@
         <cfquery datasource="PMSD_SATS">
             IF COL_LENGTH('dbo.ImportBatch', 'SourceHeaders') IS NULL
                 ALTER TABLE dbo.ImportBatch ADD SourceHeaders NVARCHAR(MAX) NULL
+        </cfquery>
+
+        <cfquery datasource="PMSD_SATS">
+            IF COL_LENGTH('dbo.ImportBatch', 'SourceFile') IS NULL
+                ALTER TABLE dbo.ImportBatch ADD SourceFile NVARCHAR(500) NULL
         </cfquery>
 
         <cfquery datasource="PMSD_SATS">
@@ -2003,8 +2038,10 @@
                     message="A valid batch ID is required to delete.">
             </cfif>
 
+            <cfset ensureSourceStorage()>
+
             <cfquery name="existingBatch" datasource="PMSD_SATS">
-                SELECT BatchID
+                SELECT BatchID, SourceFile
                 FROM dbo.ImportBatch
                 WHERE BatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
             </cfquery>
@@ -2014,8 +2051,6 @@
                     type="Import.BatchNotFound"
                     message="Batch ###arguments.batchID# was not found.">
             </cfif>
-
-            <cfset ensureSourceStorage()>
 
             <cftransaction>
                 <cfquery datasource="PMSD_SATS">
@@ -2045,6 +2080,13 @@
             </cftransaction>
 
             <cfset result.success = true>
+            <cfif len(trim(existingBatch.SourceFile & "")) AND fileExists(existingBatch.SourceFile)>
+                <cftry>
+                    <cffile action="delete" file="#existingBatch.SourceFile#">
+                    <cfcatch type="any">
+                    </cfcatch>
+                </cftry>
+            </cfif>
 
             <cfcatch type="any">
                 <cfset result.success = false>
@@ -2300,6 +2342,741 @@
         <cfreturn qryExport>
     </cffunction>
 
+    <!---Copies the uploaded workbook and inserts Directorate beside Contact Name.--->
+    <cffunction name="writePatchedWorkbook" access="private" returntype="numeric" output="false">
+        <cfargument name="sourcePath" type="string" required="true">
+        <cfargument name="destPath" type="string" required="true">
+        <cfargument name="batchID" type="numeric" required="true">
+        <cfargument name="nameIndex" type="struct" required="true">
+
+        <cfscript>
+            var sourceZip = createObject("java", "java.util.zip.ZipFile").init(arguments.sourcePath);
+            var sheetInfo = {};
+            var strings = [];
+            var sheetXml = "";
+            var patched = {};
+            var rowCount = 0;
+
+            try {
+                sheetInfo = findDataSheet(sourceZip);
+                strings = loadSharedStrings(sourceZip, sheetInfo.sharedStrings);
+                sheetXml = readZipText(sourceZip, sheetInfo.sheetPath);
+                patched = addDirectorateColumn(sheetXml, strings, arguments.batchID, arguments.nameIndex);
+                rowCount = patched.rowCount;
+                writeZipReplacing(sourceZip, arguments.destPath, sheetInfo.sheetPath, patched.xml);
+            } catch (any error) {
+                if (fileExists(arguments.destPath)) {
+                    try {
+                        fileDelete(arguments.destPath);
+                    } catch (any ignoreDelete) {
+                    }
+                }
+                rethrow;
+            } finally {
+                try {
+                    sourceZip.close();
+                } catch (any ignoreClose) {
+                }
+            }
+
+            return rowCount;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="writePatchedZip" access="private" returntype="string" output="false">
+        <cfargument name="files" type="array" required="true">
+        <cfargument name="xlsxPath" type="string" required="true">
+        <cfargument name="nameIndex" type="struct" required="true">
+
+        <cfscript>
+            var zipPath = reReplaceNoCase(arguments.xlsxPath, "\.xlsx$", ".zip");
+            var output = createObject("java", "java.io.FileOutputStream").init(zipPath);
+            var zipOut = createObject("java", "java.util.zip.ZipOutputStream").init(output);
+            var index = 0;
+            var tempPath = "";
+            var entryName = "";
+            var bytes = "";
+            var used = {};
+
+            try {
+                for (index = 1; index <= arrayLen(arguments.files); index++) {
+                    tempPath = getTempDirectory() & "timetracker-batch-" & arguments.files[index].batchID & ".xlsx";
+                    writePatchedWorkbook(
+                        arguments.files[index].sourceFile,
+                        tempPath,
+                        arguments.files[index].batchID,
+                        arguments.nameIndex
+                    );
+                    entryName = len(trim(arguments.files[index].fileName & "")) ? arguments.files[index].fileName : ("batch-" & arguments.files[index].batchID & ".xlsx");
+                    if (structKeyExists(used, lCase(entryName))) {
+                        entryName = arguments.files[index].batchID & "-" & entryName;
+                    }
+                    used[lCase(entryName)] = true;
+                    bytes = createObject("java", "java.nio.file.Files").readAllBytes(
+                        createObject("java", "java.nio.file.Paths").get(tempPath)
+                    );
+                    zipOut.putNextEntry(createObject("java", "java.util.zip.ZipEntry").init(entryName));
+                    zipOut.write(bytes, 0, bytes.length);
+                    zipOut.closeEntry();
+                    try {
+                        fileDelete(tempPath);
+                    } catch (any ignoreTemp) {
+                    }
+                }
+            } finally {
+                try {
+                    zipOut.close();
+                } catch (any ignoreZip) {
+                }
+                try {
+                    output.close();
+                } catch (any ignoreOutput) {
+                }
+            }
+
+            return getFileFromPath(zipPath);
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="findDataSheet" access="private" returntype="struct" output="false">
+        <cfargument name="sourceZip" type="any" required="true">
+
+        <cfscript>
+            var workbookXml = readZipText(arguments.sourceZip, "xl/workbook.xml");
+            var relsXml = readZipText(arguments.sourceZip, "xl/_rels/workbook.xml.rels");
+            var relationships = relationshipTargets(relsXml);
+            var sheetPattern = createObject("java", "java.util.regex.Pattern").compile("(?i)<sheet\\b[^>]*>");
+            var matcher = sheetPattern.matcher(workbookXml);
+            var sheets = [];
+            var tag = "";
+            var sheet = {};
+            var index = 0;
+            var sharedStrings = "xl/sharedStrings.xml";
+
+            if (structKeyExists(relationships, "sharedstrings")) {
+                sharedStrings = relationships.sharedstrings;
+            }
+
+            while (matcher.find()) {
+                tag = matcher.group(javacast("int", 0));
+                sheet = {
+                    name = attrValue(tag, "name"),
+                    target = ""
+                };
+                sheet.target = relationshipTarget(relationships, attrValue(tag, "r:id"));
+                if (len(sheet.target)) {
+                    arrayAppend(sheets, sheet);
+                }
+            }
+
+            for (index = 1; index <= arrayLen(sheets); index++) {
+                if (compareNoCase(sheets[index].name, "data") == 0) {
+                    return {sheetPath = sheets[index].target, sharedStrings = sharedStrings};
+                }
+            }
+
+            for (index = 1; index <= arrayLen(sheets); index++) {
+                if (sheetHasContactHeader(arguments.sourceZip, sheets[index].target, sharedStrings)) {
+                    return {sheetPath = sheets[index].target, sharedStrings = sharedStrings};
+                }
+            }
+
+            if (arrayLen(sheets)) {
+                return {sheetPath = sheets[1].target, sharedStrings = sharedStrings};
+            }
+        </cfscript>
+
+        <cfthrow
+            type="Export.DataSheetMissing"
+            message="The uploaded workbook does not contain a worksheet.">
+    </cffunction>
+
+    <cffunction name="sheetHasContactHeader" access="private" returntype="boolean" output="false">
+        <cfargument name="sourceZip" type="any" required="true">
+        <cfargument name="sheetPath" type="string" required="true">
+        <cfargument name="sharedStrings" type="string" required="true">
+
+        <cfscript>
+            var strings = loadSharedStrings(arguments.sourceZip, arguments.sharedStrings);
+            var sheetXml = readZipText(arguments.sourceZip, arguments.sheetPath);
+            var info = findContactHeader(sheetXml, strings);
+            return len(info.letter) GT 0;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="addDirectorateColumn" access="private" returntype="struct" output="false">
+        <cfargument name="sheetXml" type="string" required="true">
+        <cfargument name="strings" type="array" required="true">
+        <cfargument name="batchID" type="numeric" required="true">
+        <cfargument name="nameIndex" type="struct" required="true">
+
+        <cfscript>
+            var header = findContactHeader(arguments.sheetXml, arguments.strings);
+            var insertAt = 0;
+            var newLetter = "";
+            var shifted = "";
+            var matches = {};
+            var rowPattern = createObject("java", "java.util.regex.Pattern").compile("(?s)<row\\b[^>]*>.*?</row>");
+            var matcher = "";
+            var buffer = createObject("java", "java.lang.StringBuffer").init();
+            var rowXml = "";
+            var rowNumber = 0;
+            var contact = "";
+            var directorate = "";
+            var rowCount = 0;
+
+            if (NOT len(header.letter)) {
+                throw(type = "Export.ContactColumnMissing", message = "The contact column was not found.");
+            }
+
+            insertAt = header.columnNumber + 1;
+            newLetter = columnLetters(insertAt);
+            shifted = shiftSheetXml(arguments.sheetXml, insertAt);
+            matches = loadDirectorateMatches(arguments.batchID);
+            matcher = rowPattern.matcher(shifted);
+
+            while (matcher.find()) {
+                rowXml = matcher.group(javacast("int", 0));
+                rowNumber = val(attrValue(rowXml, "r"));
+                if (rowNumber EQ header.rowNumber) {
+                    rowXml = insertCellAfter(rowXml, header.letter, rowNumber, directorateCell(newLetter, rowNumber, "Directorate"));
+                } else if (rowNumber GT 0) {
+                    contact = contactText(rowXml, header.letter, rowNumber, arguments.strings);
+                    rowCount++;
+                    if (len(contact)) {
+                        directorate = directorateTextForContact(contact, matches, arguments.nameIndex);
+                        if (len(directorate)) {
+                            rowXml = insertCellAfter(rowXml, header.letter, rowNumber, directorateCell(newLetter, rowNumber, directorate));
+                        }
+                    }
+                }
+                matcher.appendReplacement(buffer, matcher.quoteReplacement(rowXml));
+            }
+            matcher.appendTail(buffer);
+
+            return {xml = buffer.toString(), rowCount = rowCount};
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="findContactHeader" access="private" returntype="struct" output="false">
+        <cfargument name="sheetXml" type="string" required="true">
+        <cfargument name="strings" type="array" required="true">
+
+        <cfscript>
+            var rowPattern = createObject("java", "java.util.regex.Pattern").compile("(?s)<row\\b[^>]*>.*?</row>");
+            var matcher = rowPattern.matcher(arguments.sheetXml);
+            var rowXml = "";
+            var cells = [];
+            var index = 0;
+            var text = "";
+            var empty = {letter = "", columnNumber = 0, rowNumber = 0};
+
+            if (NOT matcher.find()) {
+                return empty;
+            }
+
+            rowXml = matcher.group(javacast("int", 0));
+            cells = parseRowCells(rowXml, arguments.strings);
+            for (index = 1; index <= arrayLen(cells); index++) {
+                text = cells[index].text;
+                if (compareNoCase(text, "Contact Name") EQ 0
+                    OR compareNoCase(text, "Contact_Name") EQ 0
+                    OR compareNoCase(text, "ContactName") EQ 0
+                    OR (len(text) LTE 40 AND findNoCase("contact", text) AND NOT find("[", text))) {
+                    return cells[index];
+                }
+            }
+
+            return empty;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="parseRowCells" access="private" returntype="array" output="false">
+        <cfargument name="rowXml" type="string" required="true">
+        <cfargument name="strings" type="array" required="true">
+
+        <cfscript>
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)<c\\b([^>]*?)(?:/>|>(.*?)</c>)");
+            var matcher = pattern.matcher(arguments.rowXml);
+            var cells = [];
+            var attributes = "";
+            var reference = "";
+            var letters = "";
+            var inner = "";
+
+            while (matcher.find()) {
+                attributes = matcher.group(javacast("int", 1));
+                inner = matcher.group(javacast("int", 2));
+                if (isNull(inner)) {
+                    inner = "";
+                }
+                reference = attrValue(attributes, "r");
+                letters = reReplace(reference, "[^A-Za-z]", "", "all");
+                arrayAppend(cells, {
+                    letter = uCase(letters),
+                    columnNumber = columnNumber(letters),
+                    rowNumber = val(reReplace(reference, "[^0-9]", "", "all")),
+                    text = cellDisplayText(attributes, inner & "", arguments.strings)
+                });
+            }
+
+            return cells;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="contactText" access="private" returntype="string" output="false">
+        <cfargument name="rowXml" type="string" required="true">
+        <cfargument name="letter" type="string" required="true">
+        <cfargument name="rowNumber" type="numeric" required="true">
+        <cfargument name="strings" type="array" required="true">
+
+        <cfscript>
+            var cells = parseRowCells(arguments.rowXml, arguments.strings);
+            var index = 0;
+
+            for (index = 1; index <= arrayLen(cells); index++) {
+                if (compareNoCase(cells[index].letter, arguments.letter) EQ 0 AND cells[index].rowNumber EQ arguments.rowNumber) {
+                    return cells[index].text;
+                }
+            }
+
+            return "";
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="cellDisplayText" access="private" returntype="string" output="false">
+        <cfargument name="attributes" type="string" required="true">
+        <cfargument name="inner" type="any" required="false">
+        <cfargument name="strings" type="array" required="true">
+
+        <cfscript>
+            var body = isNull(arguments.inner) ? "" : (arguments.inner & "");
+            var pattern = "";
+            var matcher = "";
+            var index = 0;
+
+            if (findNoCase('t="s"', arguments.attributes)) {
+                pattern = createObject("java", "java.util.regex.Pattern").compile("<v>(\\d+)</v>");
+                matcher = pattern.matcher(body);
+                if (matcher.find()) {
+                    index = val(matcher.group(javacast("int", 1)));
+                    if (index + 1 GTE 1 AND index + 1 LTE arrayLen(arguments.strings)) {
+                        return arguments.strings[index + 1];
+                    }
+                }
+                return "";
+            }
+
+            if (findNoCase("inlineStr", arguments.attributes) OR findNoCase('t="str"', arguments.attributes)) {
+                return decodeXml(joinedTextNodes(body));
+            }
+
+            pattern = createObject("java", "java.util.regex.Pattern").compile("<v>([^<]*)</v>");
+            matcher = pattern.matcher(body);
+            if (matcher.find()) {
+                return decodeXml(matcher.group(javacast("int", 1)));
+            }
+
+            return "";
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="loadSharedStrings" access="private" returntype="array" output="false">
+        <cfargument name="sourceZip" type="any" required="true">
+        <cfargument name="entryName" type="string" required="true">
+
+        <cfscript>
+            var xml = readZipText(arguments.sourceZip, arguments.entryName);
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)<si\\b[^>]*>(.*?)</si>");
+            var matcher = pattern.matcher(xml);
+            var strings = [];
+
+            while (matcher.find()) {
+                arrayAppend(strings, decodeXml(joinedTextNodes(matcher.group(javacast("int", 1)))));
+            }
+
+            return strings;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="joinedTextNodes" access="private" returntype="string" output="false">
+        <cfargument name="xml" type="string" required="true">
+
+        <cfscript>
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)<t\\b[^>]*>(.*?)</t>");
+            var matcher = pattern.matcher(arguments.xml);
+            var text = "";
+
+            while (matcher.find()) {
+                text &= matcher.group(javacast("int", 1));
+            }
+
+            return text;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="shiftSheetXml" access="private" returntype="string" output="false">
+        <cfargument name="sheetXml" type="string" required="true">
+        <cfargument name="insertAt" type="numeric" required="true">
+
+        <cfscript>
+            var pattern = createObject("java", "java.util.regex.Pattern").compile('(?i)\b(r|ref|activeCell|sqref)="([^"]*)"');
+            var matcher = pattern.matcher(arguments.sheetXml);
+            var buffer = createObject("java", "java.lang.StringBuffer").init();
+            var spans = createObject("java", "java.util.regex.Pattern").compile('spans="(\d+):(\d+)"');
+            var spanMatcher = "";
+            var spanBuffer = createObject("java", "java.lang.StringBuffer").init();
+            var endColumn = 0;
+
+            while (matcher.find()) {
+                matcher.appendReplacement(
+                    buffer,
+                    matcher.quoteReplacement(
+                        matcher.group(javacast("int", 1)) & '="' & shiftReferenceList(matcher.group(javacast("int", 2)), arguments.insertAt) & '"'
+                    )
+                );
+            }
+            matcher.appendTail(buffer);
+
+            spanMatcher = spans.matcher(buffer.toString());
+            while (spanMatcher.find()) {
+                endColumn = val(spanMatcher.group(javacast("int", 2)));
+                if (endColumn GTE arguments.insertAt) {
+                    endColumn++;
+                }
+                spanMatcher.appendReplacement(
+                    spanBuffer,
+                    spanMatcher.quoteReplacement('spans="' & spanMatcher.group(javacast("int", 1)) & ":" & endColumn & '"')
+                );
+            }
+            spanMatcher.appendTail(spanBuffer);
+            return spanBuffer.toString();
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="shiftReferenceList" access="private" returntype="string" output="false">
+        <cfargument name="value" type="string" required="true">
+        <cfargument name="insertAt" type="numeric" required="true">
+
+        <cfscript>
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("[A-Z]{1,3}\\d+");
+            var matcher = pattern.matcher(uCase(arguments.value));
+            var buffer = createObject("java", "java.lang.StringBuffer").init();
+            var token = "";
+            var letters = "";
+            var rowNumber = "";
+            var column = 0;
+
+            while (matcher.find()) {
+                token = matcher.group(javacast("int", 0));
+                letters = reReplace(token, "[^A-Z]", "", "all");
+                rowNumber = reReplace(token, "[^0-9]", "", "all");
+                column = columnNumber(letters);
+                if (column GTE arguments.insertAt) {
+                    token = columnLetters(column + 1) & rowNumber;
+                }
+                matcher.appendReplacement(buffer, matcher.quoteReplacement(token));
+            }
+            matcher.appendTail(buffer);
+            return buffer.toString();
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="insertCellAfter" access="private" returntype="string" output="false">
+        <cfargument name="rowXml" type="string" required="true">
+        <cfargument name="letter" type="string" required="true">
+        <cfargument name="rowNumber" type="numeric" required="true">
+        <cfargument name="cellXml" type="string" required="true">
+
+        <cfscript>
+            var pattern = createObject("java", "java.util.regex.Pattern").compile('(?s)<c\\b[^>]*\\br="' & arguments.letter & arguments.rowNumber & '"[^>]*(?:/>|>.*?</c>)');
+            var matcher = pattern.matcher(arguments.rowXml);
+            var buffer = createObject("java", "java.lang.StringBuffer").init();
+
+            if (NOT matcher.find()) {
+                return arguments.rowXml;
+            }
+
+            matcher.appendReplacement(buffer, matcher.quoteReplacement(matcher.group(javacast("int", 0)) & arguments.cellXml));
+            matcher.appendTail(buffer);
+            return buffer.toString();
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="directorateCell" access="private" returntype="string" output="false">
+        <cfargument name="letter" type="string" required="true">
+        <cfargument name="rowNumber" type="numeric" required="true">
+        <cfargument name="text" type="string" required="true">
+
+        <cfscript>
+            var escaped = xmlEscape(arguments.text);
+            var space = find("&#10;", escaped) ? ' xml:space="preserve"' : "";
+            return '<c r="' & arguments.letter & arguments.rowNumber & '" t="inlineStr"><is><t' & space & ">" & escaped & "</t></is></c>";
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="columnNumber" access="private" returntype="numeric" output="false">
+        <cfargument name="letters" type="string" required="true">
+
+        <cfscript>
+            var value = uCase(arguments.letters);
+            var number = 0;
+            var index = 0;
+
+            for (index = 1; index <= len(value); index++) {
+                number = number * 26 + asc(mid(value, index, 1)) - 64;
+            }
+
+            return number;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="columnLetters" access="private" returntype="string" output="false">
+        <cfargument name="number" type="numeric" required="true">
+
+        <cfscript>
+            var value = arguments.number;
+            var letters = "";
+            var remainder = 0;
+
+            while (value GT 0) {
+                remainder = (value - 1) mod 26;
+                letters = chr(65 + remainder) & letters;
+                value = int((value - 1) / 26);
+            }
+
+            return letters;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="xmlEscape" access="private" returntype="string" output="false">
+        <cfargument name="text" type="string" required="true">
+
+        <cfscript>
+            var value = replace(arguments.text, "&", "&amp;", "all");
+            value = replace(value, "<", "&lt;", "all");
+            value = replace(value, ">", "&gt;", "all");
+            value = reReplace(value, "\r\n|\r|\n", "&#10;", "all");
+            return value;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="decodeXml" access="private" returntype="string" output="false">
+        <cfargument name="text" type="string" required="true">
+
+        <cfscript>
+            var value = reReplace(arguments.text, "&#10;|&#13;", chr(10), "all");
+            value = replace(value, "&lt;", "<", "all");
+            value = replace(value, "&gt;", ">", "all");
+            value = replace(value, "&quot;", '"', "all");
+            value = replace(value, "&apos;", "'", "all");
+            value = replace(value, "&amp;", "&", "all");
+            return value;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="normalizeContactKey" access="private" returntype="string" output="false">
+        <cfargument name="contact" type="string" required="true">
+        <cfreturn lcase(trim(reReplace(arguments.contact, "\r\n|\r", chr(10), "all")))>
+    </cffunction>
+
+    <cffunction name="loadDirectorateMatches" access="private" returntype="struct" output="false">
+        <cfargument name="batchID" type="numeric" required="true">
+
+        <cfset var matches = {}>
+        <cfset var qryMatches = queryNew("")>
+        <cfset var matchKey = "">
+
+        <cfquery name="qryMatches" datasource="PMSD_SATS">
+            SELECT
+                ClientContact,
+                DirectorateNameE,
+                ClientFirstName,
+                ClientLastName
+            FROM dbo.TimekeepingEnriched
+            WHERE ImportBatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+            AND NULLIF(LTRIM(RTRIM(DirectorateNameE)), '') IS NOT NULL
+        </cfquery>
+
+        <cfloop query="qryMatches">
+            <cfset matchKey = normalizeContactKey(qryMatches.ClientContact & "")>
+            <cfif len(matchKey) AND NOT structKeyExists(matches, matchKey)>
+                <cfset matches[matchKey] = {
+                    directorate = trim(qryMatches.DirectorateNameE & ""),
+                    firstName = qryMatches.ClientFirstName & "",
+                    lastName = qryMatches.ClientLastName & ""
+                }>
+            </cfif>
+        </cfloop>
+
+        <cfreturn matches>
+    </cffunction>
+
+    <cffunction name="attrValue" access="private" returntype="string" output="false">
+        <cfargument name="tag" type="string" required="true">
+        <cfargument name="attributeName" type="string" required="true">
+
+        <cfscript>
+            var pattern = createObject("java", "java.util.regex.Pattern").compile('(?i)\b' & arguments.attributeName & '="([^"]*)"');
+            var matcher = pattern.matcher(arguments.tag);
+
+            if (matcher.find()) {
+                return matcher.group(javacast("int", 1));
+            }
+
+            return "";
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="relationshipTargets" access="private" returntype="struct" output="false">
+        <cfargument name="relsXml" type="string" required="true">
+
+        <cfscript>
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?i)<Relationship\\b[^>]*>");
+            var matcher = pattern.matcher(arguments.relsXml);
+            var targets = {};
+            var tag = "";
+            var id = "";
+            var target = "";
+            var typeName = "";
+
+            while (matcher.find()) {
+                tag = matcher.group(javacast("int", 0));
+                id = attrValue(tag, "Id");
+                target = normalizePackagePath(attrValue(tag, "Target"));
+                typeName = attrValue(tag, "Type");
+                if (len(id)) {
+                    targets[id] = target;
+                }
+                if (findNoCase("/sharedStrings", typeName)) {
+                    targets.sharedstrings = target;
+                }
+            }
+
+            return targets;
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="relationshipTarget" access="private" returntype="string" output="false">
+        <cfargument name="relationships" type="struct" required="true">
+        <cfargument name="id" type="string" required="true">
+
+        <cfif structKeyExists(arguments.relationships, arguments.id)>
+            <cfreturn arguments.relationships[arguments.id]>
+        </cfif>
+
+        <cfreturn "">
+    </cffunction>
+
+    <cffunction name="normalizePackagePath" access="private" returntype="string" output="false">
+        <cfargument name="target" type="string" required="true">
+
+        <cfset var path = replace(arguments.target, "\", "/", "all")>
+
+        <cfif left(path, 1) EQ "/">
+            <cfset path = mid(path, 2, len(path))>
+        </cfif>
+        <cfif left(path, 3) EQ "../">
+            <cfset path = mid(path, 4, len(path))>
+        </cfif>
+        <cfif len(path) AND left(path, 3) NEQ "xl/">
+            <cfset path = "xl/" & path>
+        </cfif>
+
+        <cfreturn path>
+    </cffunction>
+
+    <cffunction name="readZipText" access="private" returntype="string" output="false">
+        <cfargument name="sourceZip" type="any" required="true">
+        <cfargument name="entryName" type="string" required="true">
+
+        <cfscript>
+            var bytes = readZipBytes(arguments.sourceZip, arguments.entryName);
+
+            if (isSimpleValue(bytes)) {
+                return "";
+            }
+
+            return createObject("java", "java.lang.String").init(bytes, "UTF-8");
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="readZipBytes" access="private" returntype="any" output="false">
+        <cfargument name="sourceZip" type="any" required="true">
+        <cfargument name="entryName" type="string" required="true">
+
+        <cfscript>
+            var entry = arguments.sourceZip.getEntry(arguments.entryName);
+            var input = "";
+            var output = createObject("java", "java.io.ByteArrayOutputStream").init();
+            var buffer = createObject("java", "java.lang.reflect.Array").newInstance(createObject("java", "java.lang.Byte").TYPE, 16384);
+            var read = 0;
+
+            if (isNull(entry)) {
+                return "";
+            }
+
+            input = arguments.sourceZip.getInputStream(entry);
+            read = input.read(buffer);
+            while (read GT 0) {
+                output.write(buffer, 0, read);
+                read = input.read(buffer);
+            }
+            input.close();
+            return output.toByteArray();
+        </cfscript>
+    </cffunction>
+
+    <cffunction name="writeZipReplacing" access="private" returntype="void" output="false">
+        <cfargument name="sourceZip" type="any" required="true">
+        <cfargument name="destPath" type="string" required="true">
+        <cfargument name="replaceName" type="string" required="true">
+        <cfargument name="xml" type="string" required="true">
+
+        <cfscript>
+            var output = createObject("java", "java.io.FileOutputStream").init(arguments.destPath);
+            var zipOut = createObject("java", "java.util.zip.ZipOutputStream").init(output);
+            var entries = arguments.sourceZip.entries();
+            var entry = "";
+            var name = "";
+            var bytes = "";
+            var replaced = false;
+
+            try {
+                while (entries.hasMoreElements()) {
+                    entry = entries.nextElement();
+                    if (entry.isDirectory()) {
+                        continue;
+                    }
+                    name = entry.getName();
+                    zipOut.putNextEntry(createObject("java", "java.util.zip.ZipEntry").init(name));
+                    if (compare(replace(name, chr(92), "/", "all"), arguments.replaceName) EQ 0) {
+                        bytes = createObject("java", "java.lang.String").init(arguments.xml).getBytes("UTF-8");
+                        replaced = true;
+                    } else {
+                        bytes = readZipBytes(arguments.sourceZip, name);
+                    }
+                    if (NOT isSimpleValue(bytes)) {
+                        zipOut.write(bytes, 0, bytes.length);
+                    }
+                    zipOut.closeEntry();
+                }
+                if (NOT replaced) {
+                    throw(type = "Export.SheetMissing", message = "The data sheet was not found in the uploaded workbook.");
+                }
+            } finally {
+                try {
+                    zipOut.close();
+                } catch (any ignoreZip) {
+                }
+                try {
+                    output.close();
+                } catch (any ignoreOutput) {
+                }
+            }
+        </cfscript>
+    </cffunction>
+
     <!---Writes the uploaded spreadsheet with Directorate beside Contact Name.--->
     <cffunction name="writeAllDataExport" access="public" returntype="struct" output="false">
         <cfargument name="batchFilter" type="numeric" required="true">
@@ -2307,7 +3084,9 @@
 
         <cfsetting requesttimeout="600">
 
-        <cfset var result = {recordCount = 0, note = ""}>
+        <cfset var result = {recordCount = 0, note = "", fileName = getFileFromPath(arguments.filePath)}>
+        <cfset var readyFiles = []>
+        <cfset var readyFile = {}>
         <cfset var sourceBatches = queryNew("")>
         <cfset var legacyCount = queryNew("")>
         <cfset var workbook = "">
@@ -2330,111 +3109,52 @@
         <cfset ensureSourceStorage()>
 
         <cfquery name="sourceBatches" datasource="PMSD_SATS">
-            SELECT BatchID, FileName, SourceHeaders
+            SELECT BatchID, FileName, SourceFile
             FROM dbo.ImportBatch
-            WHERE SourceHeaders IS NOT NULL
-            AND LTRIM(RTRIM(SourceHeaders)) <> ''
-            AND EXISTS (
-                SELECT 1
-                FROM dbo.TimekeepingSourceRow AS sourceRow
-                WHERE sourceRow.ImportBatchID = dbo.ImportBatch.BatchID
-            )
+            WHERE SourceFile IS NOT NULL
+            AND LTRIM(RTRIM(SourceFile)) <> ''
             <cfif arguments.batchFilter GT 0>
                 AND BatchID = <cfqueryparam value="#arguments.batchFilter#" cfsqltype="cf_sql_integer">
             </cfif>
             ORDER BY ImportDate, BatchID
         </cfquery>
 
-        <cfif sourceBatches.recordCount EQ 0>
+        <cfloop query="sourceBatches">
+            <cfif fileExists(sourceBatches.SourceFile) AND compareNoCase(listLast(sourceBatches.SourceFile, "."), "xlsx") EQ 0>
+                <cfset arrayAppend(readyFiles, {
+                    batchID = sourceBatches.BatchID,
+                    fileName = sourceBatches.FileName,
+                    sourceFile = sourceBatches.SourceFile
+                })>
+            </cfif>
+        </cfloop>
+
+        <cfif NOT arrayLen(readyFiles)>
             <cfset result.recordCount = writeLegacyExport(arguments.batchFilter, arguments.filePath)>
             <cfif result.recordCount GT 0>
-                <cfset result.note = "This file uses the previous export layout because the original spreadsheet columns were not saved for this import. Upload the spreadsheet again to download the original columns with Directorate beside Contact Name.">
+                <cfset result.note = "This download is not the original workbook. That file was not kept for this import. Upload it again, then export, to get the same workbook with Directorate inserted beside Contact Name.">
             </cfif>
             <cfreturn result>
         </cfif>
 
         <cfset nameIndex = buildDirectoryNameIndex()>
-        <cfset workbook = spreadsheetNew("data", true)>
-        <cfset poiBook = poiWorkbook(workbook)>
-        <cfset dataFormat = poiBook.createDataFormat()>
-        <cfset headerFont = poiBook.createFont()>
-        <cftry>
-            <cfset headerFont.setBold(true)>
-            <cfcatch type="any">
-                <cftry>
-                    <cfset headerFont.setBoldweight(javacast("short", 700))>
-                    <cfcatch type="any">
-                    </cfcatch>
-                </cftry>
-            </cfcatch>
-        </cftry>
-        <cfset headerStyle = poiBook.createCellStyle()>
-        <cfset headerStyle.setFont(headerFont)>
 
-        <cfloop query="sourceBatches">
-            <cfset spec = headerSpec(sourceBatches.SourceHeaders)>
-            <cfset storedMatches = {}>
-            <cfset sheetNumber = sheetNumber + 1>
-
-            <cfquery name="qrySourceRows" datasource="PMSD_SATS">
-                SELECT SourceData
-                FROM dbo.TimekeepingSourceRow
-                WHERE ImportBatchID = <cfqueryparam value="#sourceBatches.BatchID#" cfsqltype="cf_sql_integer">
-                ORDER BY RowNumber
-            </cfquery>
-
-            <cfquery name="qryMatches" datasource="PMSD_SATS">
-                SELECT
-                    ClientContact,
-                    DirectorateNameE,
-                    ClientFirstName,
-                    ClientLastName
-                FROM dbo.TimekeepingEnriched
-                WHERE ImportBatchID = <cfqueryparam value="#sourceBatches.BatchID#" cfsqltype="cf_sql_integer">
-                AND NULLIF(LTRIM(RTRIM(DirectorateNameE)), '') IS NOT NULL
-            </cfquery>
-
-            <cfloop query="qryMatches">
-                <cfset matchKey = lcase(trim(qryMatches.ClientContact & ""))>
-                <cfif len(matchKey) AND NOT structKeyExists(storedMatches, matchKey)>
-                    <cfset storedMatches[matchKey] = {
-                        directorate = trim(qryMatches.DirectorateNameE & ""),
-                        firstName = qryMatches.ClientFirstName & "",
-                        lastName = qryMatches.ClientLastName & ""
-                    }>
-                </cfif>
-            </cfloop>
-
-            <cfif sourceBatches.recordCount EQ 1>
-                <cfset sheetLabel = sanitizeSheetName(spec.sheetName)>
-            <cfelse>
-                <cfset sheetLabel = uniqueSheetName(sourceBatches.FileName, usedNames)>
-            </cfif>
-
-            <cfif sheetNumber EQ 1>
-                <cfset poiSheet = poiBook.getSheetAt(javacast("int", 0))>
-                <cfset poiBook.setSheetName(javacast("int", 0), sheetLabel)>
-            <cfelse>
-                <cfset poiSheet = poiBook.createSheet(sheetLabel)>
-            </cfif>
-
-            <cfset result.recordCount = result.recordCount + writeBatchSheet(
-                poiSheet = poiSheet,
-                poiBook = poiBook,
-                spec = spec,
-                sourceRows = qrySourceRows,
-                storedMatches = storedMatches,
-                nameIndex = nameIndex,
-                dataFormat = dataFormat,
-                styleCache = styleCache,
-                headerStyle = headerStyle
+        <cfif arrayLen(readyFiles) EQ 1>
+            <cfset result.recordCount = writePatchedWorkbook(
+                sourcePath = readyFiles[1].sourceFile,
+                destPath = arguments.filePath,
+                batchID = readyFiles[1].batchID,
+                nameIndex = nameIndex
             )>
-        </cfloop>
+        <cfelse>
+            <cfset result.fileName = writePatchedZip(readyFiles, arguments.filePath, nameIndex)>
+            <cfset result.recordCount = arrayLen(readyFiles)>
+        </cfif>
 
         <cfquery name="legacyCount" datasource="PMSD_SATS">
             SELECT COUNT(*) AS LegacyCount
             FROM dbo.ImportBatch
-            WHERE (SourceHeaders IS NULL OR LTRIM(RTRIM(SourceHeaders)) = '')
+            WHERE (SourceFile IS NULL OR LTRIM(RTRIM(SourceFile)) = '')
             AND ProcessingStatus = 'Completed'
             AND (
                 EXISTS (
@@ -2455,10 +3175,9 @@
         </cfquery>
 
         <cfif legacyCount.LegacyCount GT 0>
-            <cfset result.note = "Older imports were not included because their original columns were not saved. Open one of those batches and export it, or upload the spreadsheet again to get the original layout with Directorate beside Contact Name.">
+            <cfset result.note = "Older imports were not included because the original workbook was not kept. Upload those spreadsheets again to export the same file with Directorate beside Contact Name.">
         </cfif>
 
-        <cfset saveWorkbook(poiBook, arguments.filePath)>
         <cfreturn result>
     </cffunction>
 
@@ -2836,7 +3555,7 @@
         <cfargument name="nameIndex" type="struct" required="true">
 
         <cfset var names = parseContactNames(arguments.contact)>
-        <cfset var storedKey = lcase(trim(arguments.contact))>
+        <cfset var storedKey = normalizeContactKey(arguments.contact)>
         <cfset var stored = {}>
         <cfset var storedDirectorate = "">
         <cfset var lines = []>

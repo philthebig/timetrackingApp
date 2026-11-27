@@ -33,7 +33,7 @@
                     <cfif exportResult.recordCount GT 0>
                         <cfset exportSuccess = true>
                         <cfset exportRecordCount = exportResult.recordCount>
-                        <cfset exportFileName = fileName>
+                        <cfset exportFileName = len(trim(exportResult.fileName & "")) ? exportResult.fileName : fileName>
                         <cfset exportNote = exportResult.note>
                     <cfelse>
                         <cfset exportSuccess = false>
@@ -152,7 +152,7 @@
                                     <div class="card-body text-center">
                                         <i class="fas fa-database fa-3x text-success mb-3"></i>
                                         <h5>All Data</h5>
-                                        <p class="text-muted">Exports the uploaded spreadsheet, with a Directorate column added beside Contact Name.</p>
+                                        <p class="text-muted">Exports the same uploaded workbook, including its other sheets, with a Directorate column inserted beside Contact Name.</p>
                                         <cfoutput>
                                             <a href="export.cfm?type=all&batch=#batchFilter#&download=true" class="btn btn-success">
                                                 <i class="fas fa-download"></i> Export All

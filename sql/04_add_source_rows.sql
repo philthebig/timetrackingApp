@@ -6,6 +6,10 @@ IF COL_LENGTH('dbo.ImportBatch', 'SourceHeaders') IS NULL
     ALTER TABLE dbo.ImportBatch ADD SourceHeaders NVARCHAR(MAX) NULL;
 GO
 
+IF COL_LENGTH('dbo.ImportBatch', 'SourceFile') IS NULL
+    ALTER TABLE dbo.ImportBatch ADD SourceFile NVARCHAR(500) NULL;
+GO
+
 IF OBJECT_ID('dbo.TimekeepingSourceRow', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.TimekeepingSourceRow (
