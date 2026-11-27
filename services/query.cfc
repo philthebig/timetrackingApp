@@ -2687,7 +2687,7 @@
 
         <cfscript>
             var xml = readZipText(arguments.sourceZip, arguments.entryName);
-            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "si\b[^" & chr(62) & "]*" & chr(62) & ".*?" & chr(60) & "/si" & chr(62));
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "si\b[^" & chr(62) & "]*" & chr(62) & "(.*?)" & chr(60) & "/si" & chr(62));
             var matcher = pattern.matcher(xml);
             var strings = [];
 
@@ -2703,7 +2703,7 @@
         <cfargument name="xml" type="string" required="true">
 
         <cfscript>
-            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "t\b[^" & chr(62) & "]*" & chr(62) & ".*?" & chr(60) & "/t" & chr(62));
+            var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "t\b[^" & chr(62) & "]*" & chr(62) & "(.*?)" & chr(60) & "/t" & chr(62));
             var matcher = pattern.matcher(arguments.xml);
             var text = "";
 
