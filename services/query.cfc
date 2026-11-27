@@ -3569,7 +3569,7 @@
         <cfset var lines = []>
         <cfset var line = "">
         <cfset var name = {}>
-        <cfset var nameIndex = 0>
+        <cfset var personIndex = 0>
         <cfset var anyLine = false>
 
         <cfif structKeyExists(arguments.storedMatches, storedKey)>
@@ -3581,11 +3581,11 @@
             <cfreturn storedDirectorate>
         </cfif>
 
-        <cfloop from="1" to="#arrayLen(names)#" index="nameIndex">
-            <cfset name = names[nameIndex]>
+        <cfloop from="1" to="#arrayLen(names)#" index="personIndex">
+            <cfset name = names[personIndex]>
             <cfset line = "">
 
-            <cfif nameIndex EQ 1 AND len(storedDirectorate) AND (arrayLen(names) EQ 1 OR samePerson(stored, name))>
+            <cfif personIndex EQ 1 AND len(storedDirectorate) AND (arrayLen(names) EQ 1 OR samePerson(stored, name))>
                 <cfset line = storedDirectorate>
             </cfif>
             <cfif NOT len(line)>
