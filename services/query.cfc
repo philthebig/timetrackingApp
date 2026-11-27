@@ -2458,7 +2458,7 @@
             }
 
             while (matcher.find()) {
-                tag = matcher.group(javacast("int", 0));
+                tag = matcher.group();
                 sheet = {
                     name = attrValue(tag, "name"),
                     target = ""
@@ -2536,7 +2536,7 @@
             matcher = rowPattern.matcher(shifted);
 
             while (matcher.find()) {
-                rowXml = matcher.group(javacast("int", 0));
+                rowXml = matcher.group();
                 rowNumber = val(attrValue(rowXml, "r"));
                 if (rowNumber EQ header.rowNumber) {
                     rowXml = insertCellAfter(rowXml, header.letter, rowNumber, directorateCell(newLetter, rowNumber, "Directorate"));
@@ -2575,7 +2575,7 @@
                 return empty;
             }
 
-            rowXml = matcher.group(javacast("int", 0));
+            rowXml = matcher.group();
             cells = parseRowCells(rowXml, arguments.strings);
             for (index = 1; index <= arrayLen(cells); index++) {
                 text = cells[index].text;
@@ -2768,7 +2768,7 @@
             var column = 0;
 
             while (matcher.find()) {
-                token = matcher.group(javacast("int", 0));
+                token = matcher.group();
                 letters = reReplace(token, "[^A-Z]", "", "all");
                 rowNumber = reReplace(token, "[^0-9]", "", "all");
                 column = columnNumber(letters);
@@ -2797,7 +2797,7 @@
                 return arguments.rowXml;
             }
 
-            matcher.appendReplacement(buffer, matcher.quoteReplacement(matcher.group(javacast("int", 0)) & arguments.cellXml));
+            matcher.appendReplacement(buffer, matcher.quoteReplacement(matcher.group() & arguments.cellXml));
             matcher.appendTail(buffer);
             return buffer.toString();
         </cfscript>
@@ -2949,7 +2949,7 @@
             var typeName = "";
 
             while (matcher.find()) {
-                tag = matcher.group(javacast("int", 0));
+                tag = matcher.group();
                 id = attrValue(tag, "Id");
                 target = normalizePackagePath(attrValue(tag, "Target"));
                 typeName = attrValue(tag, "Type");
