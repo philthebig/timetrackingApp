@@ -2810,7 +2810,7 @@
 
         <cfscript>
             var escaped = xmlEscape(arguments.text);
-            var space = find("&#10;", escaped) ? ' xml:space="preserve"' : "";
+            var space = find(xmlNewline(), escaped) ? ' xml:space="preserve"' : "";
             return '<c r="' & arguments.letter & arguments.rowNumber & '" t="inlineStr"><is><t' & space & ">" & escaped & "</t></is></c>";
         </cfscript>
     </cffunction>
@@ -2849,6 +2849,14 @@
         </cfscript>
     </cffunction>
 
+    <cffunction name="xmlNewline" access="private" returntype="string" output="false">
+        <cfreturn "&" & chr(35) & "10;">
+    </cffunction>
+
+    <cffunction name="xmlCarriageReturn" access="private" returntype="string" output="false">
+        <cfreturn "&" & chr(35) & "13;">
+    </cffunction>
+
     <cffunction name="xmlEscape" access="private" returntype="string" output="false">
         <cfargument name="text" type="string" required="true">
 
@@ -2856,7 +2864,7 @@
             var value = replace(arguments.text, "&", "&amp;", "all");
             value = replace(value, "<", "&lt;", "all");
             value = replace(value, ">", "&gt;", "all");
-            value = reReplace(value, "\r\n|\r|\n", "&#10;", "all");
+            value = reReplace(value, "\r\n|\r|\n", xmlNewline(), "all");
             return value;
         </cfscript>
     </cffunction>
@@ -2865,7 +2873,7 @@
         <cfargument name="text" type="string" required="true">
 
         <cfscript>
-            var value = reReplace(arguments.text, "&#10;|&#13;", chr(10), "all");
+            var value = reReplace(arguments.text, xmlNewline() & "|" & xmlCarriageReturn(), chr(10), "all");
             value = replace(value, "&lt;", "<", "all");
             value = replace(value, "&gt;", ">", "all");
             value = replace(value, "&quot;", '"', "all");
