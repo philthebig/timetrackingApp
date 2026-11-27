@@ -2349,37 +2349,82 @@
         <cfargument name="batchID" type="numeric" required="true">
         <cfargument name="nameIndex" type="struct" required="true">
 
+        <cfset var tempDir = getTempDirectory() & "tt-" & createUUID()>
+        <cfset var workbookXml = "">
+        <cfset var relsXml = "">
+        <cfset var sharedXml = "">
+        <cfset var sheetXml = "">
+        <cfset var sheetInfo = {}>
+        <cfset var strings = []>
+        <cfset var patched = {}>
+        <cfset var sheetFile = "">
+        <cfset var rowCount = 0>
+
+        <cftry>
+            <cfdirectory action="create" directory="#tempDir#">
+            <cfzip action="unzip" file="#arguments.sourcePath#" destination="#tempDir#" overwrite="yes">
+
+            <cffile action="read" file="#tempDir#/xl/workbook.xml" variable="workbookXml" charset="utf-8">
+            <cffile action="read" file="#tempDir#/xl/_rels/workbook.xml.rels" variable="relsXml" charset="utf-8">
+
+            <cfset sheetInfo = findDataSheet(workbookXml, relsXml, tempDir)>
+            <cffile action="read" file="#tempDir#/#sheetInfo.sharedStrings#" variable="sharedXml" charset="utf-8">
+            <cfset strings = loadSharedStrings(sharedXml)>
+            <cfset sheetFile = tempDir & "/" & sheetInfo.sheetPath>
+            <cffile action="read" file="#sheetFile#" variable="sheetXml" charset="utf-8">
+            <cfset patched = addDirectorateColumn(sheetXml, strings, arguments.batchID, arguments.nameIndex)>
+            <cfset rowCount = patched.rowCount>
+            <cfset writeUtf8File(sheetFile, patched.xml)>
+
+            <cfif fileExists(arguments.destPath)>
+                <cffile action="delete" file="#arguments.destPath#">
+            </cfif>
+            <cfzip action="zip" source="#tempDir#" file="#arguments.destPath#" overwrite="yes">
+
+            <cfcatch type="any">
+                <cfif fileExists(arguments.destPath)>
+                    <cftry>
+                        <cffile action="delete" file="#arguments.destPath#">
+                        <cfcatch type="any">
+                        </cfcatch>
+                    </cftry>
+                </cfif>
+                <cfrethrow>
+            </cfcatch>
+            <cffinally>
+                <cfif directoryExists(tempDir)>
+                    <cftry>
+                        <cfdirectory action="delete" directory="#tempDir#" recurse="yes">
+                        <cfcatch type="any">
+                        </cfcatch>
+                    </cftry>
+                </cfif>
+            </cffinally>
+        </cftry>
+
+        <cfreturn rowCount>
+    </cffunction>
+
+    <cffunction name="writeUtf8File" access="private" returntype="void" output="false">
+        <cfargument name="filePath" type="string" required="true">
+        <cfargument name="contents" type="string" required="true">
+
         <cfscript>
-            var sourceZip = createObject("java", "java.util.zip.ZipFile").init(arguments.sourcePath);
-            var sheetInfo = {};
-            var strings = [];
-            var sheetXml = "";
-            var patched = {};
-            var rowCount = 0;
+            var output = createObject("java", "java.io.FileOutputStream").init(arguments.filePath);
+            var writer = createObject("java", "java.io.OutputStreamWriter").init(output, "UTF-8");
 
             try {
-                sheetInfo = findDataSheet(sourceZip);
-                strings = loadSharedStrings(sourceZip, sheetInfo.sharedStrings);
-                sheetXml = readZipText(sourceZip, sheetInfo.sheetPath);
-                patched = addDirectorateColumn(sheetXml, strings, arguments.batchID, arguments.nameIndex);
-                rowCount = patched.rowCount;
-                writeZipReplacing(sourceZip, arguments.destPath, sheetInfo.sheetPath, patched.xml);
-            } catch (any error) {
-                if (fileExists(arguments.destPath)) {
-                    try {
-                        fileDelete(arguments.destPath);
-                    } catch (any ignoreDelete) {
-                    }
-                }
-                rethrow;
+                writer.write(arguments.contents);
             } finally {
                 try {
-                    sourceZip.close();
-                } catch (any ignoreClose) {
+                    writer.close();
+                } catch (any ignoreWriter) {
+                }
+                try {
+                    output.close();
+                } catch (any ignoreOutput) {
                 }
             }
-
-            return rowCount;
         </cfscript>
     </cffunction>
 
@@ -2439,14 +2484,14 @@
     </cffunction>
 
     <cffunction name="findDataSheet" access="private" returntype="struct" output="false">
-        <cfargument name="sourceZip" type="any" required="true">
+        <cfargument name="workbookXml" type="string" required="true">
+        <cfargument name="relsXml" type="string" required="true">
+        <cfargument name="baseDirectory" type="string" required="true">
 
         <cfscript>
-            var workbookXml = readZipText(arguments.sourceZip, "xl/workbook.xml");
-            var relsXml = readZipText(arguments.sourceZip, "xl/_rels/workbook.xml.rels");
-            var relationships = relationshipTargets(relsXml);
+            var relationships = relationshipTargets(arguments.relsXml);
             var sheetPattern = createObject("java", "java.util.regex.Pattern").compile("(?i)" & chr(60) & "sheet\b[^" & chr(62) & "]*" & chr(62));
-            var matcher = sheetPattern.matcher(workbookXml);
+            var matcher = sheetPattern.matcher(arguments.workbookXml);
             var sheets = [];
             var tag = "";
             var sheet = {};
@@ -2476,7 +2521,7 @@
             }
 
             for (index = 1; index <= arrayLen(sheets); index++) {
-                if (sheetHasContactHeader(arguments.sourceZip, sheets[index].target, sharedStrings)) {
+                if (sheetHasContactHeader(arguments.baseDirectory, sheets[index].target, sharedStrings)) {
                     return {sheetPath = sheets[index].target, sharedStrings = sharedStrings};
                 }
             }
@@ -2492,16 +2537,20 @@
     </cffunction>
 
     <cffunction name="sheetHasContactHeader" access="private" returntype="boolean" output="false">
-        <cfargument name="sourceZip" type="any" required="true">
+        <cfargument name="baseDirectory" type="string" required="true">
         <cfargument name="sheetPath" type="string" required="true">
         <cfargument name="sharedStrings" type="string" required="true">
 
-        <cfscript>
-            var strings = loadSharedStrings(arguments.sourceZip, arguments.sharedStrings);
-            var sheetXml = readZipText(arguments.sourceZip, arguments.sheetPath);
-            var info = findContactHeader(sheetXml, strings);
-            return len(info.letter) GT 0;
-        </cfscript>
+        <cfset var sharedXml = "">
+        <cfset var sheetXml = "">
+        <cfset var strings = []>
+        <cfset var info = {}>
+
+        <cffile action="read" file="#arguments.baseDirectory#/#arguments.sharedStrings#" variable="sharedXml" charset="utf-8">
+        <cffile action="read" file="#arguments.baseDirectory#/#arguments.sheetPath#" variable="sheetXml" charset="utf-8">
+        <cfset strings = loadSharedStrings(sharedXml)>
+        <cfset info = findContactHeader(sheetXml, strings)>
+        <cfreturn len(info.letter) GT 0>
     </cffunction>
 
     <cffunction name="addDirectorateColumn" access="private" returntype="struct" output="false">
@@ -2682,13 +2731,11 @@
     </cffunction>
 
     <cffunction name="loadSharedStrings" access="private" returntype="array" output="false">
-        <cfargument name="sourceZip" type="any" required="true">
-        <cfargument name="entryName" type="string" required="true">
+        <cfargument name="xml" type="string" required="true">
 
         <cfscript>
-            var xml = readZipText(arguments.sourceZip, arguments.entryName);
             var pattern = createObject("java", "java.util.regex.Pattern").compile("(?s)" & chr(60) & "si\b[^" & chr(62) & "]*" & chr(62) & "(.*?)" & chr(60) & "/si" & chr(62));
-            var matcher = pattern.matcher(xml);
+            var matcher = pattern.matcher(arguments.xml);
             var strings = [];
 
             while (matcher.find()) {
