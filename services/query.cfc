@@ -3024,7 +3024,7 @@
                 return "";
             }
 
-            input = arguments.sourceZip.getInputStream(entry);
+            input = createObject("java", "java.io.BufferedInputStream").init(arguments.sourceZip.getInputStream(entry));
             read = input.read(buffer);
             while (read GT 0) {
                 output.write(buffer, 0, read);
