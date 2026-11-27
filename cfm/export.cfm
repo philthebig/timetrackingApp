@@ -137,7 +137,7 @@
                                     <div class="card-body text-center">
                                         <i class="fas fa-database fa-3x text-success mb-3"></i>
                                         <h5>All Data</h5>
-                                        <p class="text-muted">Export all matched records with full organizational details.</p>
+                                        <p class="text-muted">Export matched and unmatched records. Unmatched rows include the contact text and the reason they were not matched.</p>
                                         <cfoutput>
                                             <a href="export.cfm?type=all&batch=#batchFilter#&download=true" class="btn btn-success">
                                                 <i class="fas fa-download"></i> Export All

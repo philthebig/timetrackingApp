@@ -1825,11 +1825,12 @@
         <cfargument name="batchFilter" type="numeric" required="true">
 
         <cfquery name="qryExport" datasource="PMSD_SATS">
-            SELECT 
+            SELECT
                 ClientFirstName,
                 ClientLastName,
                 ClientEmail,
                 ClientUserID,
+                ClientContact,
                 RecordedHours,
                 DirectorateNameE,
                 DirectorateAcronymE,
@@ -1840,12 +1841,45 @@
                 SectionNameE,
                 SectionAcronymE,
                 PositionLevel,
-                IsManager
+                IsManager,
+                MatchStatus,
+                CAST(NULL AS NVARCHAR(MAX)) AS ErrorMessage
             FROM dbo.TimekeepingEnriched
             <cfif arguments.batchFilter GT 0>
                 WHERE ImportBatchID = <cfqueryparam value="#arguments.batchFilter#" cfsqltype="cf_sql_integer">
             </cfif>
-            ORDER BY DirectorateNameE, ClientLastName, ClientFirstName
+
+            UNION ALL
+
+            SELECT
+                ClientFirstName,
+                ClientLastName,
+                CASE
+                    WHEN ClientEmail LIKE 'c:%' AND ClientEmail NOT LIKE '%@%' THEN NULL
+                    ELSE ClientEmail
+                END,
+                CAST(NULL AS NVARCHAR(50)),
+                ClientContact,
+                RecordedHours,
+                CAST(NULL AS NVARCHAR(255)),
+                CAST(NULL AS NVARCHAR(50)),
+                CAST(NULL AS NVARCHAR(255)),
+                CAST(NULL AS NVARCHAR(50)),
+                CAST(NULL AS NVARCHAR(255)),
+                CAST(NULL AS NVARCHAR(50)),
+                CAST(NULL AS NVARCHAR(255)),
+                CAST(NULL AS NVARCHAR(50)),
+                CAST(NULL AS NVARCHAR(50)),
+                CAST(NULL AS BIT),
+                'Unmatched',
+                ErrorMessage
+            FROM dbo.UnmatchedClients
+            WHERE Active = 1
+            <cfif arguments.batchFilter GT 0>
+                AND ImportBatchID = <cfqueryparam value="#arguments.batchFilter#" cfsqltype="cf_sql_integer">
+            </cfif>
+
+            ORDER BY MatchStatus, DirectorateNameE, ClientLastName, ClientFirstName
         </cfquery>
 
         <cfreturn qryExport>
