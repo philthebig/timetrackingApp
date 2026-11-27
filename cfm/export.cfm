@@ -25,36 +25,48 @@
                 <cfset filePath = exportsDir & "/" & fileName>
                 
                 <!--- Query based on export type --->
-                <cfswitch expression="#exportType#">
-                    <cfcase value="unmatched">
-                        <cfinvoke component="#application.query#" method="unmatchedExport" returnvariable="exportData" argumentcollection="#args#">
-                    </cfcase>
-                    
-                    <cfcase value="directorate">
-                        <cfinvoke component="#application.query#" method="directorateExport" returnvariable="exportData" argumentcollection="#args#">
-                    </cfcase>
-                    
-                    <cfdefaultcase>
-                        <!--- Export All --->
-                        <cfinvoke component="#application.query#" method="allExport" returnvariable="exportData" argumentcollection="#args#">
-                    </cfdefaultcase>
-                </cfswitch>
-                
-                <!--- Create Excel file --->
-                <cfif exportData.recordCount GT 0>
-                    <cfspreadsheet action="write" 
-                                  filename="#filePath#" 
-                                  query="exportData" 
-                                  overwrite="true"
-                                  sheetname="Data">
-                    
-                    <!--- Set success flag --->
-                    <cfset exportSuccess = true>
-                    <cfset exportRecordCount = exportData.recordCount>
-                    <cfset exportFileName = fileName>
+                <cfif exportType EQ "all">
+                    <cfinvoke component="#application.query#" method="writeAllDataExport" returnvariable="exportResult">
+                        <cfinvokeargument name="batchFilter" value="#batchFilter#">
+                        <cfinvokeargument name="filePath" value="#filePath#">
+                    </cfinvoke>
+                    <cfif exportResult.recordCount GT 0>
+                        <cfset exportSuccess = true>
+                        <cfset exportRecordCount = exportResult.recordCount>
+                        <cfset exportFileName = fileName>
+                        <cfset exportNote = exportResult.note>
+                    <cfelse>
+                        <cfset exportSuccess = false>
+                        <cfset exportError = "No data found to export.">
+                    </cfif>
                 <cfelse>
-                    <cfset exportSuccess = false>
-                    <cfset exportError = "No data found to export.">
+                    <cfswitch expression="#exportType#">
+                        <cfcase value="unmatched">
+                            <cfinvoke component="#application.query#" method="unmatchedExport" returnvariable="exportData" argumentcollection="#args#">
+                        </cfcase>
+
+                        <cfcase value="directorate">
+                            <cfinvoke component="#application.query#" method="directorateExport" returnvariable="exportData" argumentcollection="#args#">
+                        </cfcase>
+
+                        <cfdefaultcase>
+                            <cfinvoke component="#application.query#" method="allExport" returnvariable="exportData" argumentcollection="#args#">
+                        </cfdefaultcase>
+                    </cfswitch>
+
+                    <cfif exportData.recordCount GT 0>
+                        <cfspreadsheet action="write"
+                                      filename="#filePath#"
+                                      query="exportData"
+                                      overwrite="true"
+                                      sheetname="Data">
+                        <cfset exportSuccess = true>
+                        <cfset exportRecordCount = exportData.recordCount>
+                        <cfset exportFileName = fileName>
+                    <cfelse>
+                        <cfset exportSuccess = false>
+                        <cfset exportError = "No data found to export.">
+                    </cfif>
                 </cfif>
                 
                 <cfcatch type="any">
@@ -78,6 +90,9 @@
                             <cfoutput>
                                 <p><strong>File:</strong> #exportFileName#</p>
                                 <p><strong>Records Exported:</strong> #numberFormat(exportRecordCount)#</p>
+                                <cfif isDefined("exportNote") AND len(trim(exportNote))>
+                                    <p>#encodeForHTML(exportNote)#</p>
+                                </cfif>
                                 <p><strong>Location:</strong> /exports/#exportFileName#</p>
                             </cfoutput>
                             <hr>
@@ -137,7 +152,7 @@
                                     <div class="card-body text-center">
                                         <i class="fas fa-database fa-3x text-success mb-3"></i>
                                         <h5>All Data</h5>
-                                        <p class="text-muted">Export matched and unmatched records. Unmatched rows include the contact text and the reason they were not matched.</p>
+                                        <p class="text-muted">Exports the uploaded spreadsheet, with a Directorate column added beside Contact Name.</p>
                                         <cfoutput>
                                             <a href="export.cfm?type=all&batch=#batchFilter#&download=true" class="btn btn-success">
                                                 <i class="fas fa-download"></i> Export All

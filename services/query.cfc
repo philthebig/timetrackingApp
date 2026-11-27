@@ -16,10 +16,7 @@
         <cfset var uploadInfo = {}>
         <cfset var filePath = "">
         <cfset var batchID = 0>
-        <cfset var excelData = queryNew("")>
-        <cfset var columns = []>
-        <cfset var contactNameCol = "">
-        <cfset var hoursCol = "">
+        <cfset var sourceGrid = {}>
         <cfset var importStats = {}>
         <cfset var processingStats = {}>
 
@@ -45,24 +42,14 @@
             <cfset batchID = createImportBatch(uploadInfo.clientFile)>
             <cfset result.batchID = batchID>
 
-            <!---Reads the Excel file--->
-            <cfset excelData = readExcelData(filePath)>
-
-            <!---Puts the columns into an array--->
-            <cfset columns = listToArray(excelData.columnList)>
-
-            <!---Finds the contact column--->
-            <cfset contactNameCol = findContactColumn(columns)>
-
-            <!---Finds the hours column--->
-            <cfset hoursCol = findHoursColumn(columns)>
+            <!---Reads every column from the data sheet and keeps it for export.--->
+            <cfset sourceGrid = readSourceGrid(filePath)>
+            <cfset saveSourceGrid(batchID, sourceGrid)>
 
             <!---Imports and inserts the Excel file's data--->
             <cfset importStats = importStagingRows(
-                excelData = excelData,
                 batchID = batchID,
-                contactNameCol = contactNameCol,
-                hoursCol = hoursCol
+                sourceGrid = sourceGrid
             )>
 
             <!---Updates the batch info--->
@@ -268,6 +255,506 @@
         <cfreturn excelData>
     </cffunction>
 
+    <!---Creates the tables that keep the original spreadsheet.--->
+    <cffunction name="ensureSourceStorage" access="private" returntype="void" output="false">
+        <cfif structKeyExists(application, "sourceStorageReady") AND application.sourceStorageReady>
+            <cfreturn>
+        </cfif>
+
+        <cfquery datasource="PMSD_SATS">
+            IF COL_LENGTH('dbo.ImportBatch', 'SourceHeaders') IS NULL
+                ALTER TABLE dbo.ImportBatch ADD SourceHeaders NVARCHAR(MAX) NULL
+        </cfquery>
+
+        <cfquery datasource="PMSD_SATS">
+            IF OBJECT_ID('dbo.TimekeepingSourceRow', 'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.TimekeepingSourceRow (
+                    SourceRowID INT IDENTITY(1,1) PRIMARY KEY,
+                    ImportBatchID INT NOT NULL,
+                    RowNumber INT NOT NULL,
+                    SourceData NVARCHAR(MAX) NOT NULL
+                )
+            END
+        </cfquery>
+
+        <cfquery datasource="PMSD_SATS">
+            IF NOT EXISTS (
+                SELECT 1
+                FROM sys.indexes
+                WHERE name = 'IX_TimekeepingSourceRow_Batch'
+                AND object_id = OBJECT_ID('dbo.TimekeepingSourceRow')
+            )
+                CREATE INDEX IX_TimekeepingSourceRow_Batch
+                ON dbo.TimekeepingSourceRow(ImportBatchID, RowNumber)
+        </cfquery>
+
+        <cfset application.sourceStorageReady = true>
+    </cffunction>
+
+    <!---Reads the uploaded sheet, including the original column names.--->
+    <cffunction name="readSourceGrid" access="private" returntype="struct" output="false">
+        <cfargument name="filePath" type="string" required="true">
+
+        <cfset var workbook = spreadsheetRead(arguments.filePath)>
+        <cfset var poiBook = "">
+        <cfset var sheetIndex = 0>
+        <cfset var sheet = "">
+        <cfset var headers = []>
+        <cfset var formats = []>
+        <cfset var rows = []>
+        <cfset var contactIndex = 0>
+        <cfset var hoursIndex = 0>
+        <cfset var lastRow = 0>
+        <cfset var rowIndex = 0>
+        <cfset var row = "">
+        <cfset var cells = []>
+        <cfset var columnIndex = 0>
+        <cfset var rawCell = "">
+        <cfset var parsed = {}>
+        <cfset var hasValue = false>
+        <cfset var headerIndex = 0>
+        <cfset var format = "">
+        <cfset var grid = {}>
+
+        <cftry>
+            <cfset poiBook = workbook.getWorkBook()>
+            <cfcatch type="any">
+                <cftry>
+                    <cfset poiBook = workbook.getWorkbook()>
+                    <cfcatch type="any">
+                        <cfthrow
+                            type="Import.SpreadsheetReadFailed"
+                            message="The Excel file could not be opened."
+                            detail="#cfcatch.message#">
+                    </cfcatch>
+                </cftry>
+            </cfcatch>
+        </cftry>
+
+        <cfset sheetIndex = chooseDataSheet(poiBook)>
+        <cfset sheet = poiBook.getSheetAt(javacast("int", sheetIndex))>
+        <cfset headers = readHeaderLabels(sheet)>
+
+        <cfif NOT arrayLen(headers)>
+            <cfset closeWorkbook(poiBook)>
+            <cfthrow
+                type="Import.EmptySpreadsheet"
+                message="No data found in the Excel file.">
+        </cfif>
+
+        <cfloop from="1" to="#arrayLen(headers)#" index="headerIndex">
+            <cfif NOT len(headers[headerIndex])>
+                <cfset headers[headerIndex] = "Column #headerIndex#">
+            </cfif>
+            <cfset arrayAppend(formats, "")>
+        </cfloop>
+
+        <cfset contactIndex = findHeaderIndex(headers, "contact")>
+        <cfset hoursIndex = findHeaderIndex(headers, "hours")>
+
+        <cfif contactIndex LT 1>
+            <cfset closeWorkbook(poiBook)>
+            <cfthrow
+                type="Import.ContactColumnMissing"
+                message="The contact column was not found.">
+        </cfif>
+        <cfif hoursIndex LT 1>
+            <cfset closeWorkbook(poiBook)>
+            <cfthrow
+                type="Import.HoursColumnMissing"
+                message="The hours column was not found.">
+        </cfif>
+
+        <cfset lastRow = sheet.getLastRowNum()>
+        <cfloop from="1" to="#lastRow#" index="rowIndex">
+            <cfset row = sheet.getRow(javacast("int", rowIndex))>
+            <cfset cells = []>
+            <cfset hasValue = false>
+
+            <cfif isNull(row)>
+                <cfcontinue>
+            </cfif>
+
+            <cfloop from="0" to="#arrayLen(headers) - 1#" index="columnIndex">
+                <cfset rawCell = row.getCell(javacast("int", columnIndex))>
+                <cfif isNull(rawCell)>
+                    <cfset parsed = {t = "s", v = ""}>
+                <cfelse>
+                    <cfset parsed = readPoiCell(rawCell)>
+                    <cfset format = readCellFormat(rawCell)>
+                    <cfif len(format) AND NOT len(formats[columnIndex + 1])>
+                        <cfset formats[columnIndex + 1] = format>
+                    </cfif>
+                </cfif>
+                <cfif len(trim(parsed.v & ""))>
+                    <cfset hasValue = true>
+                </cfif>
+                <cfset arrayAppend(cells, parsed)>
+            </cfloop>
+
+            <cfif hasValue>
+                <cfset arrayAppend(rows, {
+                    rowNumber = rowIndex + 1,
+                    cells = cells
+                })>
+            </cfif>
+        </cfloop>
+
+        <cfloop from="1" to="#arrayLen(formats)#" index="headerIndex">
+            <cfif NOT len(formats[headerIndex])>
+                <cfset formats[headerIndex] = "General">
+            </cfif>
+        </cfloop>
+
+        <cfif NOT arrayLen(rows)>
+            <cfset closeWorkbook(poiBook)>
+            <cfthrow
+                type="Import.EmptySpreadsheet"
+                message="No data found in the Excel file.">
+        </cfif>
+
+        <cfset grid = {
+            sheetName = poiBook.getSheetName(javacast("int", sheetIndex)) & "",
+            columns = headers,
+            formats = formats,
+            contactIndex = contactIndex,
+            hoursIndex = hoursIndex,
+            rows = rows
+        }>
+        <cfset closeWorkbook(poiBook)>
+        <cfreturn grid>
+    </cffunction>
+
+    <!---Prefers the sheet named data, which is the uploaded timekeeping report.--->
+    <cffunction name="chooseDataSheet" access="private" returntype="numeric" output="false">
+        <cfargument name="poiBook" type="any" required="true">
+
+        <cfset var sheetCount = arguments.poiBook.getNumberOfSheets()>
+        <cfset var sheetIndex = 0>
+        <cfset var headers = []>
+        <cfset var bestIndex = -1>
+        <cfset var bestRows = -1>
+        <cfset var rowCount = 0>
+
+        <cfif sheetCount LTE 0>
+            <cfthrow
+                type="Import.EmptySpreadsheet"
+                message="The Excel file has no worksheets.">
+        </cfif>
+
+        <cfloop from="0" to="#sheetCount - 1#" index="sheetIndex">
+            <cfif compareNoCase(arguments.poiBook.getSheetName(javacast("int", sheetIndex)), "data") EQ 0>
+                <cfreturn sheetIndex>
+            </cfif>
+        </cfloop>
+
+        <cfif sheetCount EQ 1>
+            <cfreturn 0>
+        </cfif>
+
+        <cfloop from="0" to="#sheetCount - 1#" index="sheetIndex">
+            <cfset headers = readHeaderLabels(arguments.poiBook.getSheetAt(javacast("int", sheetIndex)))>
+            <cfif findNoCase("contact", arrayToList(headers, "|")) GT 0>
+                <cfset rowCount = arguments.poiBook.getSheetAt(javacast("int", sheetIndex)).getLastRowNum()>
+                <cfif rowCount GT bestRows>
+                    <cfset bestIndex = sheetIndex>
+                    <cfset bestRows = rowCount>
+                </cfif>
+            </cfif>
+        </cfloop>
+
+        <cfif bestIndex GTE 0>
+            <cfreturn bestIndex>
+        </cfif>
+
+        <cfreturn 0>
+    </cffunction>
+
+    <!---Reads the header text in sheet order.--->
+    <cffunction name="readHeaderLabels" access="private" returntype="array" output="false">
+        <cfargument name="sheet" type="any" required="true">
+
+        <cfset var headerRow = arguments.sheet.getRow(javacast("int", 0))>
+        <cfset var labels = []>
+        <cfset var lastColumn = 0>
+        <cfset var columnIndex = 0>
+        <cfset var rawCell = "">
+        <cfset var label = "">
+
+        <cfif isNull(headerRow)>
+            <cfreturn labels>
+        </cfif>
+
+        <cfset lastColumn = headerRow.getLastCellNum()>
+        <cfif NOT isNumeric(lastColumn) OR lastColumn LTE 0>
+            <cfreturn labels>
+        </cfif>
+
+        <cfloop from="0" to="#lastColumn - 1#" index="columnIndex">
+            <cfset rawCell = headerRow.getCell(javacast("int", columnIndex))>
+            <cfif isNull(rawCell)>
+                <cfset label = "">
+            <cfelse>
+                <cfset label = trim(readPoiCell(rawCell).v & "")>
+            </cfif>
+            <cfset arrayAppend(labels, label)>
+        </cfloop>
+
+        <cfloop condition="arrayLen(labels) GT 0 AND NOT len(trim(labels[arrayLen(labels)] & ''))">
+            <cfset arrayDeleteAt(labels, arrayLen(labels))>
+        </cfloop>
+
+        <cfreturn labels>
+    </cffunction>
+
+    <!---Turns one Excel cell into a value that can be stored and written back.--->
+    <cffunction name="readPoiCell" access="private" returntype="struct" output="false">
+        <cfargument name="cell" type="any" required="true">
+
+        <cfset var result = {t = "s", v = ""}>
+        <cfset var typeName = "">
+        <cfset var rawNumber = 0>
+
+        <cfif isNull(arguments.cell)>
+            <cfreturn result>
+        </cfif>
+
+        <cfset typeName = poiTypeName(arguments.cell.getCellType())>
+        <cfif typeName EQ "FORMULA">
+            <cfset typeName = poiTypeName(arguments.cell.getCachedFormulaResultType())>
+        </cfif>
+
+        <cfif typeName EQ "BLANK" OR typeName EQ "ERROR">
+            <cfreturn result>
+        </cfif>
+
+        <cfif typeName EQ "BOOLEAN">
+            <cfset result.v = arguments.cell.getBooleanCellValue() ? "TRUE" : "FALSE">
+            <cfreturn result>
+        </cfif>
+
+        <cfif typeName EQ "NUMERIC">
+            <cfset rawNumber = arguments.cell.getNumericCellValue()>
+            <cftry>
+                <cfif createObject("java", "org.apache.poi.ss.usermodel.DateUtil").isCellDateFormatted(arguments.cell)>
+                    <cfset result.t = "d">
+                    <cfset result.v = scaleNumber(rawNumber, 8)>
+                    <cfreturn result>
+                </cfif>
+                <cfcatch type="any">
+                </cfcatch>
+            </cftry>
+            <cfset result.t = "n">
+            <cfset result.v = scaleNumber(rawNumber, 4)>
+            <cfreturn result>
+        </cfif>
+
+        <cftry>
+            <cfset result.v = arguments.cell.getStringCellValue() & "">
+            <cfcatch type="any">
+                <cfset result.v = createObject("java", "org.apache.poi.ss.usermodel.DataFormatter").init().formatCellValue(arguments.cell) & "">
+            </cfcatch>
+        </cftry>
+
+        <cfreturn result>
+    </cffunction>
+
+    <cffunction name="poiTypeName" access="private" returntype="string" output="false">
+        <cfargument name="cellType" type="any" required="true">
+
+        <cfif isSimpleValue(arguments.cellType)>
+            <cfif arguments.cellType EQ 0>
+                <cfreturn "NUMERIC">
+            <cfelseif arguments.cellType EQ 1>
+                <cfreturn "STRING">
+            <cfelseif arguments.cellType EQ 2>
+                <cfreturn "FORMULA">
+            <cfelseif arguments.cellType EQ 4>
+                <cfreturn "BOOLEAN">
+            </cfif>
+            <cfreturn "BLANK">
+        </cfif>
+
+        <cfreturn uCase(arguments.cellType.toString())>
+    </cffunction>
+
+    <cffunction name="scaleNumber" access="private" returntype="numeric" output="false">
+        <cfargument name="rawNumber" type="numeric" required="true">
+        <cfargument name="scale" type="numeric" required="true">
+
+        <cfset var rounding = createObject("java", "java.math.RoundingMode")>
+        <cfset var bd = createObject("java", "java.math.BigDecimal").init(javacast("double", arguments.rawNumber))>
+
+        <cfset bd = bd.setScale(javacast("int", arguments.scale), rounding.HALF_UP).stripTrailingZeros()>
+        <cfif bd.scale() LTE 0>
+            <cfreturn bd.longValue() + 0>
+        </cfif>
+
+        <cfreturn bd.doubleValue() + 0>
+    </cffunction>
+
+    <cffunction name="readCellFormat" access="private" returntype="string" output="false">
+        <cfargument name="cell" type="any" required="true">
+
+        <cfset var format = "">
+
+        <cfif isNull(arguments.cell)>
+            <cfreturn "">
+        </cfif>
+
+        <cftry>
+            <cfset format = arguments.cell.getCellStyle().getDataFormatString() & "">
+            <cfcatch type="any">
+                <cfreturn "">
+            </cfcatch>
+        </cftry>
+
+        <cfif NOT len(format) OR compareNoCase(format, "General") EQ 0 OR left(format, 9) EQ "reserved-">
+            <cfreturn "">
+        </cfif>
+
+        <cfreturn format>
+    </cffunction>
+
+    <!---Finds a header by its role. Contact is the column the directorate is placed beside.--->
+    <cffunction name="findHeaderIndex" access="private" returntype="numeric" output="false">
+        <cfargument name="headers" type="array" required="true">
+        <cfargument name="kind" type="string" required="true">
+
+        <cfset var headerIndex = 0>
+        <cfset var headerName = "">
+
+        <cfloop from="1" to="#arrayLen(arguments.headers)#" index="headerIndex">
+            <cfset headerName = arguments.headers[headerIndex] & "">
+            <cfif arguments.kind EQ "contact">
+                <cfif compareNoCase(headerName, "Contact_Name") EQ 0
+                    OR compareNoCase(headerName, "ContactName") EQ 0
+                    OR compareNoCase(headerName, "Contact Name") EQ 0
+                    OR findNoCase("contact", headerName) GT 0>
+                    <cfreturn headerIndex>
+                </cfif>
+            <cfelseif findNoCase("hour", headerName) GT 0 OR findNoCase("recorded", headerName) GT 0>
+                <cfreturn headerIndex>
+            </cfif>
+        </cfloop>
+
+        <cfif arguments.kind EQ "contact" AND arrayLen(arguments.headers) GTE 5>
+            <cfreturn 5>
+        </cfif>
+        <cfif arguments.kind NEQ "contact" AND arrayLen(arguments.headers) GT 0>
+            <cfreturn arrayLen(arguments.headers)>
+        </cfif>
+
+        <cfreturn 0>
+    </cffunction>
+
+    <!---Saves the original columns and rows for the all-data export.--->
+    <cffunction name="saveSourceGrid" access="private" returntype="void" output="false">
+        <cfargument name="batchID" type="numeric" required="true">
+        <cfargument name="sourceGrid" type="struct" required="true">
+
+        <cfset var headerJson = "">
+        <cfset var pending = []>
+        <cfset var row = {}>
+        <cfset var rowJson = "">
+        <cfset var startAt = 1>
+        <cfset var endAt = 1>
+        <cfset var chunkIndex = 1>
+        <cfset var chunkSize = 40>
+
+        <cfset ensureSourceStorage()>
+        <cfset headerJson = serializeJSON({
+            sheetName = arguments.sourceGrid.sheetName,
+            columns = arguments.sourceGrid.columns,
+            formats = arguments.sourceGrid.formats,
+            contactIndex = arguments.sourceGrid.contactIndex
+        })>
+
+        <cfquery datasource="PMSD_SATS">
+            UPDATE dbo.ImportBatch
+            SET SourceHeaders = <cfqueryparam value="#headerJson#" cfsqltype="cf_sql_varchar">
+            WHERE BatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+        </cfquery>
+
+        <cfloop array="#arguments.sourceGrid.rows#" index="row">
+            <cfset rowJson = serializeJSON(row.cells)>
+            <cfif len(rowJson) GT 7000>
+                <cfthrow
+                    type="Import.RowTooLarge"
+                    message="A spreadsheet row is too large to store.">
+            </cfif>
+            <cfset arrayAppend(pending, {
+                rowNumber = row.rowNumber,
+                json = rowJson
+            })>
+        </cfloop>
+
+        <cfloop from="1" to="#arrayLen(pending)#" index="startAt" step="#chunkSize#">
+            <cfset endAt = min(startAt + chunkSize - 1, arrayLen(pending))>
+            <cfquery datasource="PMSD_SATS">
+                INSERT INTO dbo.TimekeepingSourceRow (
+                    ImportBatchID,
+                    RowNumber,
+                    SourceData
+                )
+                VALUES
+                <cfloop from="#startAt#" to="#endAt#" index="chunkIndex">
+                    <cfif chunkIndex GT startAt>,</cfif>
+                    (
+                        <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">,
+                        <cfqueryparam value="#pending[chunkIndex].rowNumber#" cfsqltype="cf_sql_integer">,
+                        <cfqueryparam value="#pending[chunkIndex].json#" cfsqltype="cf_sql_varchar">
+                    )
+                </cfloop>
+            </cfquery>
+        </cfloop>
+    </cffunction>
+
+    <cffunction name="storedCell" access="private" returntype="struct" output="false">
+        <cfargument name="cell" type="any" required="true">
+
+        <cfset var cellType = "s">
+        <cfset var cellValue = "">
+
+        <cfif isStruct(arguments.cell)>
+            <cfif structKeyExists(arguments.cell, "t")>
+                <cfset cellType = arguments.cell.t>
+            <cfelseif structKeyExists(arguments.cell, "T")>
+                <cfset cellType = arguments.cell.T>
+            </cfif>
+            <cfif structKeyExists(arguments.cell, "v")>
+                <cfset cellValue = arguments.cell.v>
+            <cfelseif structKeyExists(arguments.cell, "V")>
+                <cfset cellValue = arguments.cell.V>
+            </cfif>
+        <cfelseif isNumeric(arguments.cell)>
+            <cfset cellType = "n">
+            <cfset cellValue = arguments.cell>
+        <cfelse>
+            <cfset cellValue = arguments.cell & "">
+        </cfif>
+
+        <cfreturn {t = lcase(cellType & ""), v = cellValue}>
+    </cffunction>
+
+    <cffunction name="cellText" access="private" returntype="string" output="false">
+        <cfargument name="cell" type="any" required="true">
+        <cfreturn trim(storedCell(arguments.cell).v & "")>
+    </cffunction>
+
+    <cffunction name="cellNumber" access="private" returntype="string" output="false">
+        <cfargument name="cell" type="any" required="true">
+
+        <cfset var stored = storedCell(arguments.cell)>
+
+        <cfif stored.t EQ "n" OR (stored.t NEQ "d" AND isNumeric(stored.v))>
+            <cfreturn stored.v & "">
+        </cfif>
+
+        <cfreturn "">
+    </cffunction>
+
     <!---Finds the contact column--->
     <cffunction name="findContactColumn" access="private" returntype="string" output="false">
         <cfargument name="columns" type="array" required="true">
@@ -312,53 +799,39 @@
             message="The hours column was not found.">
     </cffunction>
 
-    <!---Imports and calls the insert function--->
+    <!---Imports contact and hours, and keeps every original row for export.--->
     <cffunction name="importStagingRows" access="private" returntype="struct" output="false">
-        <cfargument name="excelData" type="query" required="true">
         <cfargument name="batchID" type="numeric" required="true">
-        <cfargument name="contactNameCol" type="string" required="true">
-        <cfargument name="hoursCol" type="string" required="true">
+        <cfargument name="sourceGrid" type="struct" required="true">
 
         <cfset var stats = {recordCount = 0, skippedCount = 0}>
-        <cfset var currentRowNumber = 0>
+        <cfset var row = {}>
         <cfset var clientContact = "">
         <cfset var hoursValue = "">
-        <cfset var hours = 0>
+        <cfset var contactIndex = arguments.sourceGrid.contactIndex>
+        <cfset var hoursIndex = arguments.sourceGrid.hoursIndex>
 
-        <!---Loops through the data and fill in the info--->
-        <cfloop query="arguments.excelData">
-            <cfset currentRowNumber = arguments.excelData.currentRow>
+        <cfloop array="#arguments.sourceGrid.rows#" index="row">
             <cfset clientContact = "">
             <cfset hoursValue = "">
-            <cfset hours = 0>
 
-            <cftry>
-                <cfset clientContact = trim(arguments.excelData[arguments.contactNameCol][currentRowNumber])>
-                <cfset hoursValue = arguments.excelData[arguments.hoursCol][currentRowNumber]>
-
-                <cfcatch type="any">
-                    <cfset stats.skippedCount = stats.skippedCount + 1>
-                    <cfcontinue>
-                </cfcatch>
-            </cftry>
-
-            <cfif NOT len(clientContact)>
-                <cfset stats.skippedCount = stats.skippedCount + 1>
-                <cfcontinue>
+            <cfif arrayLen(row.cells) GTE contactIndex>
+                <cfset clientContact = cellText(row.cells[contactIndex])>
             </cfif>
-            <cfif NOT isNumeric(hoursValue)>
+            <cfif arrayLen(row.cells) GTE hoursIndex>
+                <cfset hoursValue = cellNumber(row.cells[hoursIndex])>
+            </cfif>
+
+            <cfif NOT len(clientContact) OR NOT isNumeric(hoursValue)>
                 <cfset stats.skippedCount = stats.skippedCount + 1>
                 <cfcontinue>
             </cfif>
 
-            <cfset hours = val(hoursValue)>
-
-            <!---Call the insert function--->
             <cfset insertStagingRow(
                 batchID = arguments.batchID,
-                rowNumber = currentRowNumber,
+                rowNumber = row.rowNumber,
                 clientContact = clientContact,
-                hours = hours
+                hours = val(hoursValue)
             )>
             <cfset stats.recordCount = stats.recordCount + 1>
         </cfloop>
@@ -1542,7 +2015,14 @@
                     message="Batch ###arguments.batchID# was not found.">
             </cfif>
 
+            <cfset ensureSourceStorage()>
+
             <cftransaction>
+                <cfquery datasource="PMSD_SATS">
+                    DELETE FROM dbo.TimekeepingSourceRow
+                    WHERE ImportBatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
+                </cfquery>
+
                 <cfquery datasource="PMSD_SATS">
                     DELETE FROM dbo.TimekeepingEnriched
                     WHERE ImportBatchID = <cfqueryparam value="#arguments.batchID#" cfsqltype="cf_sql_integer">
@@ -1818,6 +2298,755 @@
         </cfquery>
 
         <cfreturn qryExport>
+    </cffunction>
+
+    <!---Writes the uploaded spreadsheet with Directorate beside Contact Name.--->
+    <cffunction name="writeAllDataExport" access="public" returntype="struct" output="false">
+        <cfargument name="batchFilter" type="numeric" required="true">
+        <cfargument name="filePath" type="string" required="true">
+
+        <cfsetting requesttimeout="600">
+
+        <cfset var result = {recordCount = 0, note = ""}>
+        <cfset var sourceBatches = queryNew("")>
+        <cfset var legacyCount = queryNew("")>
+        <cfset var workbook = "">
+        <cfset var poiBook = "">
+        <cfset var poiSheet = "">
+        <cfset var spec = {}>
+        <cfset var qrySourceRows = queryNew("")>
+        <cfset var qryMatches = queryNew("")>
+        <cfset var storedMatches = {}>
+        <cfset var matchKey = "">
+        <cfset var nameIndex = {}>
+        <cfset var usedNames = {}>
+        <cfset var sheetLabel = "">
+        <cfset var sheetNumber = 0>
+        <cfset var dataFormat = "">
+        <cfset var styleCache = {}>
+        <cfset var headerFont = "">
+        <cfset var headerStyle = "">
+
+        <cfset ensureSourceStorage()>
+
+        <cfquery name="sourceBatches" datasource="PMSD_SATS">
+            SELECT BatchID, FileName, SourceHeaders
+            FROM dbo.ImportBatch
+            WHERE SourceHeaders IS NOT NULL
+            AND LTRIM(RTRIM(SourceHeaders)) <> ''
+            AND EXISTS (
+                SELECT 1
+                FROM dbo.TimekeepingSourceRow AS sourceRow
+                WHERE sourceRow.ImportBatchID = dbo.ImportBatch.BatchID
+            )
+            <cfif arguments.batchFilter GT 0>
+                AND BatchID = <cfqueryparam value="#arguments.batchFilter#" cfsqltype="cf_sql_integer">
+            </cfif>
+            ORDER BY ImportDate, BatchID
+        </cfquery>
+
+        <cfif sourceBatches.recordCount EQ 0>
+            <cfset result.recordCount = writeLegacyExport(arguments.batchFilter, arguments.filePath)>
+            <cfif result.recordCount GT 0>
+                <cfset result.note = "This file uses the previous export layout because the original spreadsheet columns were not saved for this import. Upload the spreadsheet again to download the original columns with Directorate beside Contact Name.">
+            </cfif>
+            <cfreturn result>
+        </cfif>
+
+        <cfset nameIndex = buildDirectoryNameIndex()>
+        <cfset workbook = spreadsheetNew("data", true)>
+        <cfset poiBook = poiWorkbook(workbook)>
+        <cfset dataFormat = poiBook.createDataFormat()>
+        <cfset headerFont = poiBook.createFont()>
+        <cftry>
+            <cfset headerFont.setBold(true)>
+            <cfcatch type="any">
+                <cftry>
+                    <cfset headerFont.setBoldweight(javacast("short", 700))>
+                    <cfcatch type="any">
+                    </cfcatch>
+                </cftry>
+            </cfcatch>
+        </cftry>
+        <cfset headerStyle = poiBook.createCellStyle()>
+        <cfset headerStyle.setFont(headerFont)>
+
+        <cfloop query="sourceBatches">
+            <cfset spec = headerSpec(sourceBatches.SourceHeaders)>
+            <cfset storedMatches = {}>
+            <cfset sheetNumber = sheetNumber + 1>
+
+            <cfquery name="qrySourceRows" datasource="PMSD_SATS">
+                SELECT SourceData
+                FROM dbo.TimekeepingSourceRow
+                WHERE ImportBatchID = <cfqueryparam value="#sourceBatches.BatchID#" cfsqltype="cf_sql_integer">
+                ORDER BY RowNumber
+            </cfquery>
+
+            <cfquery name="qryMatches" datasource="PMSD_SATS">
+                SELECT
+                    ClientContact,
+                    DirectorateNameE,
+                    ClientFirstName,
+                    ClientLastName
+                FROM dbo.TimekeepingEnriched
+                WHERE ImportBatchID = <cfqueryparam value="#sourceBatches.BatchID#" cfsqltype="cf_sql_integer">
+                AND NULLIF(LTRIM(RTRIM(DirectorateNameE)), '') IS NOT NULL
+            </cfquery>
+
+            <cfloop query="qryMatches">
+                <cfset matchKey = lcase(trim(qryMatches.ClientContact & ""))>
+                <cfif len(matchKey) AND NOT structKeyExists(storedMatches, matchKey)>
+                    <cfset storedMatches[matchKey] = {
+                        directorate = trim(qryMatches.DirectorateNameE & ""),
+                        firstName = qryMatches.ClientFirstName & "",
+                        lastName = qryMatches.ClientLastName & ""
+                    }>
+                </cfif>
+            </cfloop>
+
+            <cfif sourceBatches.recordCount EQ 1>
+                <cfset sheetLabel = sanitizeSheetName(spec.sheetName)>
+            <cfelse>
+                <cfset sheetLabel = uniqueSheetName(sourceBatches.FileName, usedNames)>
+            </cfif>
+
+            <cfif sheetNumber EQ 1>
+                <cfset poiSheet = poiBook.getSheetAt(javacast("int", 0))>
+                <cfset poiBook.setSheetName(javacast("int", 0), sheetLabel)>
+            <cfelse>
+                <cfset poiSheet = poiBook.createSheet(sheetLabel)>
+            </cfif>
+
+            <cfset result.recordCount = result.recordCount + writeBatchSheet(
+                poiSheet = poiSheet,
+                poiBook = poiBook,
+                spec = spec,
+                sourceRows = qrySourceRows,
+                storedMatches = storedMatches,
+                nameIndex = nameIndex,
+                dataFormat = dataFormat,
+                styleCache = styleCache,
+                headerStyle = headerStyle
+            )>
+        </cfloop>
+
+        <cfquery name="legacyCount" datasource="PMSD_SATS">
+            SELECT COUNT(*) AS LegacyCount
+            FROM dbo.ImportBatch
+            WHERE (SourceHeaders IS NULL OR LTRIM(RTRIM(SourceHeaders)) = '')
+            AND ProcessingStatus = 'Completed'
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM dbo.TimekeepingEnriched AS enriched
+                    WHERE enriched.ImportBatchID = dbo.ImportBatch.BatchID
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM dbo.UnmatchedClients AS unmatched
+                    WHERE unmatched.ImportBatchID = dbo.ImportBatch.BatchID
+                    AND unmatched.Active = 1
+                )
+            )
+            <cfif arguments.batchFilter GT 0>
+                AND BatchID = <cfqueryparam value="#arguments.batchFilter#" cfsqltype="cf_sql_integer">
+            </cfif>
+        </cfquery>
+
+        <cfif legacyCount.LegacyCount GT 0>
+            <cfset result.note = "Older imports were not included because their original columns were not saved. Open one of those batches and export it, or upload the spreadsheet again to get the original layout with Directorate beside Contact Name.">
+        </cfif>
+
+        <cfset saveWorkbook(poiBook, arguments.filePath)>
+        <cfreturn result>
+    </cffunction>
+
+    <cffunction name="writeLegacyExport" access="private" returntype="numeric" output="false">
+        <cfargument name="batchFilter" type="numeric" required="true">
+        <cfargument name="filePath" type="string" required="true">
+
+        <cfset var legacyQuery = allExport(arguments.batchFilter)>
+        <cfset var columns = [
+            "ClientFirstName",
+            "ClientLastName",
+            "ClientEmail",
+            "ClientUserID",
+            "ClientContact",
+            "RecordedHours",
+            "DirectorateNameE",
+            "DirectorateAcronymE",
+            "DivisionNameE",
+            "DivisionAcronymE",
+            "BranchNameE",
+            "BranchAcronymE",
+            "SectionNameE",
+            "SectionAcronymE",
+            "PositionLevel",
+            "IsManager",
+            "MatchStatus",
+            "ErrorMessage"
+        ]>
+        <cfset var workbook = "">
+        <cfset var poiBook = "">
+        <cfset var poiSheet = "">
+        <cfset var dataFormat = "">
+        <cfset var styleCache = {}>
+        <cfset var headerStyle = "">
+        <cfset var headerFont = "">
+        <cfset var headerRow = "">
+        <cfset var headerCell = "">
+        <cfset var poiRow = "">
+        <cfset var columnIndex = 0>
+        <cfset var columnName = "">
+        <cfset var value = "">
+        <cfset var cell = {}>
+        <cfset var rowIndex = 0>
+
+        <cfif legacyQuery.recordCount EQ 0>
+            <cfreturn 0>
+        </cfif>
+
+        <cfset workbook = spreadsheetNew("Data", true)>
+        <cfset poiBook = poiWorkbook(workbook)>
+        <cfset poiSheet = poiBook.getSheetAt(javacast("int", 0))>
+        <cfset dataFormat = poiBook.createDataFormat()>
+        <cfset headerFont = poiBook.createFont()>
+        <cftry>
+            <cfset headerFont.setBold(true)>
+            <cfcatch type="any">
+            </cfcatch>
+        </cftry>
+        <cfset headerStyle = poiBook.createCellStyle()>
+        <cfset headerStyle.setFont(headerFont)>
+        <cfset headerRow = poiSheet.createRow(javacast("int", 0))>
+
+        <cfloop from="1" to="#arrayLen(columns)#" index="columnIndex">
+            <cfset headerCell = headerRow.createCell(javacast("int", columnIndex - 1))>
+            <cfset headerCell.setCellValue(javacast("string", columns[columnIndex]))>
+            <cfset headerCell.setCellStyle(headerStyle)>
+        </cfloop>
+
+        <cfloop from="1" to="#legacyQuery.recordCount#" index="rowIndex">
+            <cfset poiRow = poiSheet.createRow(javacast("int", rowIndex))>
+            <cfloop from="1" to="#arrayLen(columns)#" index="columnIndex">
+                <cfset columnName = columns[columnIndex]>
+                <cfset value = legacyQuery[columnName][rowIndex]>
+                <cfif isNull(value)>
+                    <cfset value = "">
+                </cfif>
+                <cfif columnName EQ "RecordedHours" AND isNumeric(value)>
+                    <cfset cell = {t = "n", v = val(value)}>
+                <cfelse>
+                    <cfset cell = {t = "s", v = value & ""}>
+                </cfif>
+                <cfset writeExcelValue(
+                    poiRow = poiRow,
+                    poiColumn = columnIndex - 1,
+                    cell = cell,
+                    format = "General",
+                    wrap = false,
+                    poiBook = poiBook,
+                    dataFormat = dataFormat,
+                    styleCache = styleCache
+                )>
+            </cfloop>
+        </cfloop>
+
+        <cfset saveWorkbook(poiBook, arguments.filePath)>
+        <cfreturn legacyQuery.recordCount>
+    </cffunction>
+
+    <cffunction name="writeBatchSheet" access="private" returntype="numeric" output="false">
+        <cfargument name="poiSheet" type="any" required="true">
+        <cfargument name="poiBook" type="any" required="true">
+        <cfargument name="spec" type="struct" required="true">
+        <cfargument name="sourceRows" type="query" required="true">
+        <cfargument name="storedMatches" type="struct" required="true">
+        <cfargument name="nameIndex" type="struct" required="true">
+        <cfargument name="dataFormat" type="any" required="true">
+        <cfargument name="styleCache" type="struct" required="true">
+        <cfargument name="headerStyle" type="any" required="true">
+
+        <cfset var outputHeaders = []>
+        <cfset var headerIndex = 0>
+        <cfset var headerRow = "">
+        <cfset var headerCell = "">
+        <cfset var cells = []>
+        <cfset var contact = "">
+        <cfset var directorate = "">
+        <cfset var poiRow = "">
+        <cfset var poiColumn = 0>
+        <cfset var sourceCell = {}>
+        <cfset var columnFormat = "General">
+        <cfset var excelRow = 1>
+        <cfset var lineTotal = 1>
+        <cfset var chars = 12>
+        <cfset var filterRange = "">
+
+        <cfloop from="1" to="#arrayLen(arguments.spec.columns)#" index="headerIndex">
+            <cfset arrayAppend(outputHeaders, arguments.spec.columns[headerIndex] & "")>
+            <cfif headerIndex EQ arguments.spec.contactIndex>
+                <cfset arrayAppend(outputHeaders, "Directorate")>
+            </cfif>
+        </cfloop>
+
+        <cfset headerRow = arguments.poiSheet.createRow(javacast("int", 0))>
+        <cfloop from="1" to="#arrayLen(outputHeaders)#" index="headerIndex">
+            <cfset headerCell = headerRow.createCell(javacast("int", headerIndex - 1))>
+            <cfset headerCell.setCellValue(javacast("string", outputHeaders[headerIndex] & ""))>
+            <cfset headerCell.setCellStyle(arguments.headerStyle)>
+            <cfset chars = max(12, len(outputHeaders[headerIndex] & "") + 2)>
+            <cfif headerIndex EQ arguments.spec.contactIndex OR headerIndex EQ arguments.spec.contactIndex + 1>
+                <cfset chars = 42>
+            </cfif>
+            <cfset arguments.poiSheet.setColumnWidth(
+                javacast("int", headerIndex - 1),
+                javacast("int", min(chars, 55) * 256)
+            )>
+        </cfloop>
+
+        <cfloop from="1" to="#arguments.sourceRows.recordCount#" index="excelRow">
+            <cfset cells = deserializeJSON(arguments.sourceRows.SourceData[excelRow])>
+            <cfif NOT isArray(cells)>
+                <cfthrow
+                    type="Export.InvalidSourceRow"
+                    message="A saved spreadsheet row could not be read.">
+            </cfif>
+
+            <cfset contact = "">
+            <cfif arrayLen(cells) GTE arguments.spec.contactIndex>
+                <cfset contact = cellText(cells[arguments.spec.contactIndex])>
+            </cfif>
+            <cfset directorate = directorateTextForContact(
+                contact = contact,
+                storedMatches = arguments.storedMatches,
+                nameIndex = arguments.nameIndex
+            )>
+            <cfset poiRow = arguments.poiSheet.createRow(javacast("int", excelRow))>
+            <cfset poiColumn = 0>
+
+            <cfloop from="1" to="#arrayLen(arguments.spec.columns)#" index="headerIndex">
+                <cfif arrayLen(cells) GTE headerIndex>
+                    <cfset sourceCell = cells[headerIndex]>
+                <cfelse>
+                    <cfset sourceCell = {t = "s", v = ""}>
+                </cfif>
+                <cfset columnFormat = "General">
+                <cfif arrayLen(arguments.spec.formats) GTE headerIndex AND len(trim(arguments.spec.formats[headerIndex] & ""))>
+                    <cfset columnFormat = arguments.spec.formats[headerIndex] & "">
+                </cfif>
+                <cfset writeExcelValue(
+                    poiRow = poiRow,
+                    poiColumn = poiColumn,
+                    cell = sourceCell,
+                    format = columnFormat,
+                    wrap = (headerIndex EQ arguments.spec.contactIndex),
+                    poiBook = arguments.poiBook,
+                    dataFormat = arguments.dataFormat,
+                    styleCache = arguments.styleCache
+                )>
+                <cfset poiColumn = poiColumn + 1>
+                <cfif headerIndex EQ arguments.spec.contactIndex>
+                    <cfset writeExcelValue(
+                        poiRow = poiRow,
+                        poiColumn = poiColumn,
+                        cell = {t = "s", v = directorate},
+                        format = "General",
+                        wrap = true,
+                        poiBook = arguments.poiBook,
+                        dataFormat = arguments.dataFormat,
+                        styleCache = arguments.styleCache
+                    )>
+                    <cfset poiColumn = poiColumn + 1>
+                </cfif>
+            </cfloop>
+
+            <cfset lineTotal = max(lineCount(contact), lineCount(directorate))>
+            <cfif lineTotal GT 1>
+                <cfset poiRow.setHeight(javacast("short", min(lineTotal * 290, 8000)))>
+            </cfif>
+        </cfloop>
+
+        <cfif arguments.sourceRows.recordCount GT 0>
+            <cfset filterRange = createObject("java", "org.apache.poi.ss.util.CellRangeAddress").init(
+                javacast("int", 0),
+                javacast("int", arguments.sourceRows.recordCount),
+                javacast("int", 0),
+                javacast("int", arrayLen(outputHeaders) - 1)
+            )>
+            <cfset arguments.poiSheet.setAutoFilter(filterRange)>
+        </cfif>
+
+        <cfreturn arguments.sourceRows.recordCount>
+    </cffunction>
+
+    <cffunction name="writeExcelValue" access="private" returntype="void" output="false">
+        <cfargument name="poiRow" type="any" required="true">
+        <cfargument name="poiColumn" type="numeric" required="true">
+        <cfargument name="cell" type="any" required="true">
+        <cfargument name="format" type="string" required="true">
+        <cfargument name="wrap" type="boolean" required="true">
+        <cfargument name="poiBook" type="any" required="true">
+        <cfargument name="dataFormat" type="any" required="true">
+        <cfargument name="styleCache" type="struct" required="true">
+
+        <cfset var stored = storedCell(arguments.cell)>
+        <cfset var format = arguments.format>
+        <cfset var poiCell = "">
+        <cfset var style = "">
+
+        <cfif stored.t EQ "s" AND NOT len(trim(stored.v & ""))>
+            <cfreturn>
+        </cfif>
+
+        <cfset poiCell = arguments.poiRow.createCell(javacast("int", arguments.poiColumn))>
+        <cfif stored.t EQ "n" OR stored.t EQ "d">
+            <cfset poiCell.setCellValue(javacast("double", val(stored.v)))>
+            <cfif stored.t EQ "d" AND (NOT len(format) OR compareNoCase(format, "General") EQ 0)>
+                <cfset format = "mm-dd-yy">
+            </cfif>
+        <cfelse>
+            <cfset poiCell.setCellValue(javacast("string", stored.v & ""))>
+        </cfif>
+
+        <cfset style = workbookStyle(
+            poiBook = arguments.poiBook,
+            dataFormat = arguments.dataFormat,
+            styleCache = arguments.styleCache,
+            format = format,
+            wrap = arguments.wrap
+        )>
+        <cfif NOT isSimpleValue(style)>
+            <cfset poiCell.setCellStyle(style)>
+        </cfif>
+    </cffunction>
+
+    <cffunction name="workbookStyle" access="private" returntype="any" output="false">
+        <cfargument name="poiBook" type="any" required="true">
+        <cfargument name="dataFormat" type="any" required="true">
+        <cfargument name="styleCache" type="struct" required="true">
+        <cfargument name="format" type="string" required="true">
+        <cfargument name="wrap" type="boolean" required="true">
+
+        <cfset var key = arguments.format & chr(1) & (arguments.wrap ? "1" : "0")>
+        <cfset var style = "">
+
+        <cfif compareNoCase(arguments.format, "General") EQ 0 AND NOT arguments.wrap>
+            <cfreturn "">
+        </cfif>
+
+        <cfif structKeyExists(arguments.styleCache, key)>
+            <cfreturn arguments.styleCache[key]>
+        </cfif>
+
+        <cfset style = arguments.poiBook.createCellStyle()>
+        <cfif arguments.wrap>
+            <cfset style.setWrapText(true)>
+        </cfif>
+        <cfif len(arguments.format) AND compareNoCase(arguments.format, "General") NEQ 0>
+            <cftry>
+                <cfset style.setDataFormat(arguments.dataFormat.getFormat(arguments.format))>
+                <cfcatch type="any">
+                </cfcatch>
+            </cftry>
+        </cfif>
+
+        <cfset arguments.styleCache[key] = style>
+        <cfreturn style>
+    </cffunction>
+
+    <cffunction name="headerSpec" access="private" returntype="struct" output="false">
+        <cfargument name="headerJson" type="string" required="true">
+
+        <cfset var parsed = deserializeJSON(arguments.headerJson)>
+        <cfset var spec = {}>
+        <cfset var headerIndex = 0>
+        <cfset var format = "">
+
+        <cfif NOT isStruct(parsed)>
+            <cfthrow
+                type="Export.InvalidSource"
+                message="The saved spreadsheet columns could not be read.">
+        </cfif>
+
+        <cfset spec.columns = structValue(parsed, "columns", [])>
+        <cfset spec.formats = structValue(parsed, "formats", [])>
+        <cfset spec.sheetName = structValue(parsed, "sheetName", "data") & "">
+        <cfset spec.contactIndex = val(structValue(parsed, "contactIndex", 0))>
+
+        <cfif NOT isArray(spec.columns) OR NOT arrayLen(spec.columns)>
+            <cfthrow
+                type="Export.InvalidSource"
+                message="The saved spreadsheet columns could not be read.">
+        </cfif>
+        <cfif NOT isArray(spec.formats)>
+            <cfset spec.formats = []>
+        </cfif>
+
+        <cfloop from="1" to="#arrayLen(spec.columns)#" index="headerIndex">
+            <cfif arrayLen(spec.formats) LT headerIndex>
+                <cfset arrayAppend(spec.formats, "General")>
+            <cfelse>
+                <cfset format = spec.formats[headerIndex] & "">
+                <cfif NOT len(trim(format))>
+                    <cfset spec.formats[headerIndex] = "General">
+                </cfif>
+            </cfif>
+        </cfloop>
+
+        <cfif spec.contactIndex LT 1 OR spec.contactIndex GT arrayLen(spec.columns)>
+            <cfset spec.contactIndex = findHeaderIndex(spec.columns, "contact")>
+        </cfif>
+        <cfif spec.contactIndex LT 1>
+            <cfthrow
+                type="Export.ContactColumnMissing"
+                message="The contact column was not found in the saved spreadsheet.">
+        </cfif>
+        <cfif NOT len(trim(spec.sheetName))>
+            <cfset spec.sheetName = "data">
+        </cfif>
+
+        <cfreturn spec>
+    </cffunction>
+
+    <cffunction name="structValue" access="private" returntype="any" output="false">
+        <cfargument name="data" type="struct" required="true">
+        <cfargument name="key" type="string" required="true">
+        <cfargument name="defaultValue" type="any" required="false">
+
+        <cfset var found = "">
+
+        <cfloop collection="#arguments.data#" item="found">
+            <cfif compareNoCase(found, arguments.key) EQ 0>
+                <cfreturn arguments.data[found]>
+            </cfif>
+        </cfloop>
+
+        <cfif structKeyExists(arguments, "defaultValue")>
+            <cfreturn arguments.defaultValue>
+        </cfif>
+
+        <cfreturn "">
+    </cffunction>
+
+    <cffunction name="directorateTextForContact" access="private" returntype="string" output="false">
+        <cfargument name="contact" type="string" required="true">
+        <cfargument name="storedMatches" type="struct" required="true">
+        <cfargument name="nameIndex" type="struct" required="true">
+
+        <cfset var names = parseContactNames(arguments.contact)>
+        <cfset var storedKey = lcase(trim(arguments.contact))>
+        <cfset var stored = {}>
+        <cfset var storedDirectorate = "">
+        <cfset var lines = []>
+        <cfset var line = "">
+        <cfset var name = {}>
+        <cfset var nameIndex = 0>
+        <cfset var anyLine = false>
+
+        <cfif structKeyExists(arguments.storedMatches, storedKey)>
+            <cfset stored = arguments.storedMatches[storedKey]>
+            <cfset storedDirectorate = trim(stored.directorate & "")>
+        </cfif>
+
+        <cfif NOT arrayLen(names)>
+            <cfreturn storedDirectorate>
+        </cfif>
+
+        <cfloop from="1" to="#arrayLen(names)#" index="nameIndex">
+            <cfset name = names[nameIndex]>
+            <cfset line = "">
+
+            <cfif nameIndex EQ 1 AND len(storedDirectorate) AND (arrayLen(names) EQ 1 OR samePerson(stored, name))>
+                <cfset line = storedDirectorate>
+            </cfif>
+            <cfif NOT len(line)>
+                <cfset line = directoryDirectorate(name, arguments.nameIndex)>
+            </cfif>
+            <cfif NOT len(line) AND len(storedDirectorate) AND samePerson(stored, name)>
+                <cfset line = storedDirectorate>
+            </cfif>
+
+            <cfif len(line)>
+                <cfset anyLine = true>
+            </cfif>
+            <cfset arrayAppend(lines, line)>
+        </cfloop>
+
+        <cfif NOT anyLine>
+            <cfif arrayLen(names) GT 1 AND len(storedDirectorate)>
+                <cfreturn storedDirectorate>
+            </cfif>
+            <cfreturn "">
+        </cfif>
+
+        <cfreturn joinLines(lines)>
+    </cffunction>
+
+    <cffunction name="samePerson" access="private" returntype="boolean" output="false">
+        <cfargument name="stored" type="struct" required="true">
+        <cfargument name="name" type="struct" required="true">
+
+        <cfif NOT structKeyExists(arguments.stored, "firstName") OR NOT len(trim(arguments.stored.firstName & ""))>
+            <cfreturn false>
+        </cfif>
+
+        <cfreturn compare(compactName(arguments.stored.lastName & ""), compactName(arguments.name.lastName)) EQ 0
+            AND compare(compactName(arguments.stored.firstName & ""), compactName(arguments.name.firstName)) EQ 0>
+    </cffunction>
+
+    <cffunction name="directoryDirectorate" access="private" returntype="string" output="false">
+        <cfargument name="name" type="struct" required="true">
+        <cfargument name="nameIndex" type="struct" required="true">
+
+        <cfset var key = compactName(arguments.name.lastName) & "|" & compactName(arguments.name.firstName)>
+
+        <cfif NOT structKeyExists(arguments.nameIndex, key) OR arguments.nameIndex[key].ambiguous>
+            <cfreturn "">
+        </cfif>
+
+        <cfreturn trim(arguments.nameIndex[key].user.directorateNameE & "")>
+    </cffunction>
+
+    <cffunction name="joinLines" access="private" returntype="string" output="false">
+        <cfargument name="lines" type="array" required="true">
+
+        <cfset var text = "">
+        <cfset var lineIndex = 0>
+
+        <cfif NOT arrayLen(arguments.lines)>
+            <cfreturn "">
+        </cfif>
+
+        <cfset text = arguments.lines[1] & "">
+        <cfloop from="2" to="#arrayLen(arguments.lines)#" index="lineIndex">
+            <cfset text &= chr(10) & (arguments.lines[lineIndex] & "")>
+        </cfloop>
+
+        <cfreturn text>
+    </cffunction>
+
+    <cffunction name="lineCount" access="private" returntype="numeric" output="false">
+        <cfargument name="text" type="string" required="true">
+
+        <cfset var normalized = reReplace(arguments.text, "\r\n|\r", chr(10), "all")>
+        <cfset var count = 1>
+        <cfset var charIndex = 0>
+
+        <cfif NOT len(normalized)>
+            <cfreturn 1>
+        </cfif>
+
+        <cfloop from="1" to="#len(normalized)#" index="charIndex">
+            <cfif mid(normalized, charIndex, 1) EQ chr(10)>
+                <cfset count = count + 1>
+            </cfif>
+        </cfloop>
+
+        <cfreturn count>
+    </cffunction>
+
+    <cffunction name="closeWorkbook" access="private" returntype="void" output="false">
+        <cfargument name="poiBook" type="any" required="true">
+
+        <cfif isSimpleValue(arguments.poiBook)>
+            <cfreturn>
+        </cfif>
+
+        <cftry>
+            <cfset arguments.poiBook.close()>
+            <cfcatch type="any">
+            </cfcatch>
+        </cftry>
+    </cffunction>
+
+    <cffunction name="poiWorkbook" access="private" returntype="any" output="false">
+        <cfargument name="workbook" type="any" required="true">
+
+        <cftry>
+            <cfreturn arguments.workbook.getWorkBook()>
+            <cfcatch type="any">
+                <cfreturn arguments.workbook.getWorkbook()>
+            </cfcatch>
+        </cftry>
+    </cffunction>
+
+    <cffunction name="sanitizeSheetName" access="private" returntype="string" output="false">
+        <cfargument name="sheetName" type="string" required="true">
+
+        <cfset var label = trim(reReplace(arguments.sheetName, "[:\\/?*\[\]]", " ", "all"))>
+
+        <cfif NOT len(label)>
+            <cfreturn "data">
+        </cfif>
+
+        <cfreturn left(label, 31)>
+    </cffunction>
+
+    <cffunction name="uniqueSheetName" access="private" returntype="string" output="false">
+        <cfargument name="fileName" type="string" required="true">
+        <cfargument name="usedNames" type="struct" required="true">
+
+        <cfset var base = reReplace(arguments.fileName, "(?i)\.(xlsx|xls)$", "")>
+        <cfset var label = sanitizeSheetName(base)>
+        <cfset var suffix = "">
+        <cfset var attempt = 2>
+
+        <cfloop condition="structKeyExists(arguments.usedNames, lcase(label)) AND attempt LT 50">
+            <cfset suffix = " #attempt#">
+            <cfset label = left(sanitizeSheetName(base), 31 - len(suffix)) & suffix>
+            <cfset attempt = attempt + 1>
+        </cfloop>
+
+        <cfset arguments.usedNames[lcase(label)] = true>
+        <cfreturn label>
+    </cffunction>
+
+    <cffunction name="saveWorkbook" access="private" returntype="void" output="false">
+        <cfargument name="poiBook" type="any" required="true">
+        <cfargument name="filePath" type="string" required="true">
+
+        <cfset var outStream = "">
+        <cfset var failed = false>
+        <cfset var thrown = {}>
+
+        <cftry>
+            <cfset outStream = createObject("java", "java.io.FileOutputStream").init(arguments.filePath)>
+            <cfset arguments.poiBook.write(outStream)>
+            <cfcatch type="any">
+                <cfset failed = true>
+                <cfset thrown = cfcatch>
+            </cfcatch>
+            <cffinally>
+                <cfif NOT isSimpleValue(outStream)>
+                    <cftry>
+                        <cfset outStream.close()>
+                        <cfcatch type="any">
+                        </cfcatch>
+                    </cftry>
+                </cfif>
+                <cftry>
+                    <cfset arguments.poiBook.close()>
+                    <cfcatch type="any">
+                    </cfcatch>
+                </cftry>
+            </cffinally>
+        </cftry>
+
+        <cfif failed>
+            <cfif fileExists(arguments.filePath)>
+                <cftry>
+                    <cffile action="delete" file="#arguments.filePath#">
+                    <cfcatch type="any">
+                    </cfcatch>
+                </cftry>
+            </cfif>
+            <cfthrow
+                type="Export.WriteFailed"
+                message="#structKeyExists(thrown, 'message') ? thrown.message : 'The Excel file could not be written.'#"
+                detail="#structKeyExists(thrown, 'detail') ? thrown.detail : ''#">
+        </cfif>
     </cffunction>
 
     <!---Prepares to export all of the enriched table--->
