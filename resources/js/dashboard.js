@@ -210,7 +210,7 @@ document.addEventListener("DOMContentLoaded", function () {
             const button = event.relatedTarget;
             const email = button ? button.getAttribute("data-email") || "" : "";
             oldEmailInput.value = email;
-            newEmailInput.value = email;
+            newEmailInput.value = email.indexOf("@") >= 0 ? email : "";
         });
 
         editModal.addEventListener("shown.bs.modal", function () {
@@ -231,8 +231,9 @@ document.addEventListener("DOMContentLoaded", function () {
         deleteModal.addEventListener("show.bs.modal", function (event) {
             const button = event.relatedTarget;
             const email = button ? button.getAttribute("data-email") || "" : "";
+            const label = button ? button.getAttribute("data-label") || "" : "";
             deleteEmailInput.value = email;
-            emailDeleteText.textContent = email;
+            emailDeleteText.textContent = label || email;
         });
     }
 
@@ -244,8 +245,9 @@ document.addEventListener("DOMContentLoaded", function () {
         forceModal.addEventListener("show.bs.modal", function (event) {
             const button = event.relatedTarget;
             const email = button ? button.getAttribute("data-email") || "" : "";
+            const label = button ? button.getAttribute("data-label") || "" : "";
             forceEmailInput.value = email;
-            clientDirectorateText.textContent = email;
+            clientDirectorateText.textContent = label || email;
         });
     }
 
@@ -257,8 +259,9 @@ document.addEventListener("DOMContentLoaded", function () {
         recoveryModal.addEventListener("show.bs.modal", function (event) {
             const button = event.relatedTarget;
             const email = button ? button.getAttribute("data-email") || "" : "";
+            const label = button ? button.getAttribute("data-label") || "" : "";
             recoveryEmailInput.value = email;
-            recoveryEmailText.textContent = email;
+            recoveryEmailText.textContent = label || email;
         });
     }
 });

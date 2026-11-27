@@ -65,10 +65,14 @@
                                 <tbody>
                                     <cfloop collection="#unmatched#" item="email">
                                         <cfset client = unmatched[email]>
+                                        <cfset shownEmail = trim(email)>
+                                        <cfif reFindNoCase("^c:[0-9a-f]{64}$", shownEmail)>
+                                            <cfset shownEmail = "">
+                                        </cfif>
                                         <cfoutput>
                                             <tr>
                                                 <td>
-                                                    #encodeForHTML(email)#
+                                                    #encodeForHTML(shownEmail)#
                                                     (#val(client.occurrences)#)
                                                 </td>
                                                 <td>
@@ -87,7 +91,8 @@
                                                                     title="Edit email"
                                                                     data-bs-toggle="modal"
                                                                     data-bs-target="##editModal"
-                                                                    data-email="#encodeForHTMLAttribute(email)#">
+                                                                    data-email="#encodeForHTMLAttribute(email)#"
+                                                                    data-label="#encodeForHTMLAttribute(client.clientContact)#">
                                                                     <i class="fas fa-pen-to-square"></i>
                                                                 </button>
 
@@ -97,7 +102,8 @@
                                                                     title="Forced addition"
                                                                     data-bs-toggle="modal"
                                                                     data-bs-target="##forceAddModal"
-                                                                    data-email="#encodeForHTMLAttribute(email)#">
+                                                                    data-email="#encodeForHTMLAttribute(email)#"
+                                                                    data-label="#encodeForHTMLAttribute(client.clientContact)#">
                                                                     <i class="fas fa-plus"></i>
                                                                 </button>
 
@@ -107,7 +113,8 @@
                                                                     title="Delete"
                                                                     data-bs-toggle="modal"
                                                                     data-bs-target="##deleteModal"
-                                                                    data-email="#encodeForHTMLAttribute(email)#">
+                                                                    data-email="#encodeForHTMLAttribute(email)#"
+                                                                    data-label="#encodeForHTMLAttribute(client.clientContact)#">
                                                                     <i class="fas fa-trash"></i>
                                                                 </button>
                                                             </div>
@@ -118,7 +125,8 @@
                                                                 title="Client recovery"
                                                                 data-bs-toggle="modal"
                                                                 data-bs-target="##recoveryModal"
-                                                                data-email="#encodeForHTMLAttribute(email)#">
+                                                                data-email="#encodeForHTMLAttribute(email)#"
+                                                                data-label="#encodeForHTMLAttribute(client.clientContact)#">
                                                                 <i class="fas fa-rotate-left"></i>
                                                             </button>
                                                         </cfif>
